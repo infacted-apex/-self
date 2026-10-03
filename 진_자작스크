@@ -229,7 +229,7 @@ if game.PlaceId == 16480898254 then
         -- ETW 매크로 전용 스크립트를 실행한다.
         pcall(function()
             loadstring(game:HttpGet(
-                "https://raw.githubusercontent.com/dtrke/-self/refs/heads/main/ETW_%EB%A7%A4%ED%81%AC%EB%A1%9C"
+                "https://raw.githubusercontent.com/infacted-apex/-self/refs/heads/main/ETW%20%EB%A7%A4%ED%81%AC%EB%A1%9C"
             ))()
         end)
         return
@@ -469,7 +469,7 @@ if game.PlaceId == 15532962292 then
         -- Sol's RNG MACRO(재접속 시 자동 실행되는 것과 동일한) 전용 스크립트를 실행한다.
         pcall(function()
             loadstring(game:HttpGet(
-                "https://raw.githubusercontent.com/dtrke/-self/refs/heads/main/%EC%86%94%EC%8A%A4_%EB%A7%A4%ED%81%AC%EB%A1%9C"
+                "https://raw.githubusercontent.com/infacted-apex/-self/refs/heads/main/%EC%86%94%EC%8A%A4%20%EB%A7%A4%ED%81%AC%EB%A1%9C"
             ))()
         end)
         return
@@ -874,7 +874,7 @@ local Settings = {
 
 -- [ 파일 자동 생성 및 텔레포트 재접속 시스템 ]
 -- =============================
-local myScriptUrl = "https://raw.githubusercontent.com/dtrke/-self/refs/heads/main/%EC%9E%90%EC%9E%91%EC%8A%A4%ED%81%AC"
+local myScriptUrl = "https://raw.githubusercontent.com/infacted-apex/-self/refs/heads/main/%EC%9E%90%EC%9E%91%EC%8A%A4%ED%81%AC"
 
 
 
