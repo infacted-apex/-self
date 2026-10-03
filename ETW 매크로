@@ -32,7 +32,7 @@ math.randomseed(tick())
 -- (Sol's RNG 매크로 스크립트의 makefolder / writefile,readfile / queue_on_teleport /
 --  IS_TELEPORT_LOAD 스냅샷 패턴을 참고함)
 -- ============================================================
-local SCRIPT_URL = "https://raw.githubusercontent.com/dtrke/-self/refs/heads/main/ETW_%EB%A7%A4%ED%81%AC%EB%A1%9C"
+local SCRIPT_URL = "https://raw.githubusercontent.com/infacted-apex/-self/refs/heads/main/ETW%20%EB%A7%A4%ED%81%AC%EB%A1%9C"
 
 local BASE_FOLDER = "Workspace/ETW"
 local ACCOUNT_FOLDER = BASE_FOLDER .. "/" .. tostring(LocalPlayer.UserId)
