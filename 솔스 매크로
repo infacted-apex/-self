@@ -8189,7 +8189,7 @@ local WebhookTab = UI.New({ Title = "웹후크 설정", Icon = "webhook" })
 local biomeMacroConnection = nil
 
 local CustomWebhooks = {
-    ["RN_Draon"] =
+    ["Rn_Draon"] =
     "https://discord.com/api/webhooks/1465214896298790978/E86_cfw4-hMVlaeZaMVE4zYGDTibeW_xBYFbTEpgLaqVsQGHGBiAh0qN6uHhW5fXFb1Z",
     ["BJ_RP"] =
     "https://discord.com/api/webhooks/1465214907212496988/qUzZ4KR2da3BHQKzUpaZkzdz92gu_31My9mgTH-qbBHNfXGxeHf9XKNFFlivMF9Nn3VX",
