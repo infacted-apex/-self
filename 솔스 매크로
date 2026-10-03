@@ -4223,7 +4223,7 @@ end
 -- 원본 전체 스크립트가 다시 로드되므로, 이 SolsRNG 전용 스크립트를 실제로 올려둘
 -- 위치(GitHub raw 링크 등)로 반드시 교체해야 한다.
 local myScriptUrl =
-"https://raw.githubusercontent.com/dtrke/-self/refs/heads/main/%EC%86%94%EC%8A%A4_%EB%A7%A4%ED%81%AC%EB%A1%9C"
+"https://raw.githubusercontent.com/infacted-apex/-self/refs/heads/main/%EC%86%94%EC%8A%A4%20%EB%A7%A4%ED%81%AC%EB%A1%9C"
 
 -- ✅ [사용자 요청] "하드코딩 정리" - 매크로 시작/종료 웹훅과 "Custom General Webhook"
 -- (스크립트 실행/종료 알림)이 원래도 같은 고정 주소를 쓰도록 의도되어 있었는데(주석에
@@ -8319,7 +8319,7 @@ local function updateBiomeMacroState()
                     })
                 end
 
-                local imageUrl = "https://raw.githubusercontent.com/dtrke/SolsRNG/refs/heads/main/" ..
+                local imageUrl = "https://raw.githubusercontent.com/infacted-apex/SolsRNG/refs/heads/main/" ..
                     biomeNameUpper .. ".png"
                 embed["thumbnail"] = {
                     ["url"] = imageUrl
