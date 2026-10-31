@@ -115,6 +115,8 @@ if getgenv then
     getgenv()._ClickToMoveBusy = false -- 이전 실행이 Click to Move 설정 도중 끊겼으면 잠금이 남아있을 수 있음
     getgenv()._ClickToMoveFailStreak = 0
     getgenv()._ClickToMoveFailAt = nil
+    getgenv()._ClickToMoveSettingUntrusted = nil
+    getgenv()._OrbHuntEdenMissing = nil
 end
 
 -- ✅ [사용자 요청] 스크립트를 켜면 즉시 로딩 바가 뜨고, 상태 UI가 준비되면 사라진다.
@@ -2736,20 +2738,25 @@ do
         local header = createStatsLine(-18, 24, parentFrame)
         header.Text = string.format('<font color="%s">[ 오브 &amp; 미니언 자동 사냥 ]</font>', getgenv()._VALUE_COLOR)
 
-        local successHeader = createStatsLine(-17, 22, parentFrame)
-        successHeader.Text = string.format('<font color="%s">성공 횟수</font>', getgenv()._LABEL_COLOR)
-        local successValue = createStatsLine(-16, 22, parentFrame)
+        -- ✅ [사용자 요청] 보상 알림("Orb Awards" / "Orb Minion Awards") 기준으로 오브/미니언 처치를 따로 센다
+        local orbHeader = createStatsLine(-17, 22, parentFrame)
+        orbHeader.Text = string.format('<font color="%s">오브 처치 횟수</font>', getgenv()._LABEL_COLOR)
+        local orbValue = createStatsLine(-16, 22, parentFrame)
 
-        local failHeader = createStatsLine(-15, 22, parentFrame)
-        failHeader.Text = string.format('<font color="%s">실패 횟수</font>', getgenv()._LABEL_COLOR)
-        local failValue = createStatsLine(-14, 22, parentFrame)
+        local minionHeader = createStatsLine(-15, 22, parentFrame)
+        minionHeader.Text = string.format('<font color="%s">미니언 처치 횟수</font>', getgenv()._LABEL_COLOR)
+        local minionValue = createStatsLine(-14, 22, parentFrame)
 
-        local rewardsHeader = createStatsLine(-13, 22, parentFrame)
+        local failHeader = createStatsLine(-13, 22, parentFrame)
+        failHeader.Text = string.format('<font color="%s">실패 횟수 (시간 초과)</font>', getgenv()._LABEL_COLOR)
+        local failValue = createStatsLine(-12, 22, parentFrame)
+
+        local rewardsHeader = createStatsLine(-11, 22, parentFrame)
         rewardsHeader.Text = string.format('<font color="%s">얻은 보상들</font>', getgenv()._LABEL_COLOR)
-        local rewardsValue = createStatsLine(-12, 22, parentFrame)
+        local rewardsValue = createStatsLine(-10, 22, parentFrame)
         rewardsValue.TextWrapped = true
 
-        return { success = successValue, fail = failValue, rewards = rewardsValue }
+        return { orb = orbValue, minion = minionValue, fail = failValue, rewards = rewardsValue }
     end
     local orbHuntSessionLines = buildOrbHuntStatsLines(EventStatsFrame)
     local orbHuntAllTimeLines = buildOrbHuntStatsLines(EventAllTimeStatsFrame)
@@ -2759,8 +2766,8 @@ do
 
     -- ✅ 보상 목록 정렬 순서/색상 - 할로윈 보상 이름을 알게 되면 여기에 추가하면 된다.
     -- 목록에 없는 아이템은 이름 기준 알파벳 순, 색상이 없는 아이템은 흰색으로 표시된다.
-    local HALLOWEEN_REWARD_ORDER = {}
-    local HALLOWEEN_REWARD_COLORS = {}
+    local HALLOWEEN_REWARD_ORDER = { "Hollow Points" }
+    local HALLOWEEN_REWARD_COLORS = { ["Hollow Points"] = "#FF8C1A" }
 
     -- ✅ [사용자 요청] 지정된 순서(orderList)대로 정렬하고, 목록에 없는 아이템은 그
     -- 뒤에 이름 기준 알파벳 순으로 붙인다. 각 아이템은 colorTable에 지정된 색상으로
@@ -2801,7 +2808,8 @@ do
 
     -- 세션 통계는 getgenv()의 세션 전용 카운터에서 읽어온다.
     getgenv()._UpdateEventStatsUI = function()
-        orbHuntSessionLines.success.Text = string.format("%s", getgenv().OrbHuntSessionSuccessCount or 0)
+        orbHuntSessionLines.orb.Text = string.format("%s", getgenv().OrbHuntSessionOrbKills or 0)
+        orbHuntSessionLines.minion.Text = string.format("%s", getgenv().OrbHuntSessionMinionKills or 0)
         orbHuntSessionLines.fail.Text = string.format("%s", getgenv().OrbHuntSessionFailCount or 0)
         orbHuntSessionLines.rewards.Text = FormatRewardLines(getgenv().OrbHuntSessionRewards,
             HALLOWEEN_REWARD_ORDER, HALLOWEEN_REWARD_COLORS)
@@ -2811,7 +2819,8 @@ do
     -- _AllTimeStats(디스크 저장, 영구 누적)를 읽어온다.
     getgenv()._UpdateEventAllTimeStatsUI = function()
         local stats = getgenv()._AllTimeStats
-        orbHuntAllTimeLines.success.Text = string.format("%s", stats.OrbHuntSuccessCount or 0)
+        orbHuntAllTimeLines.orb.Text = string.format("%s", stats.OrbHuntOrbKills or 0)
+        orbHuntAllTimeLines.minion.Text = string.format("%s", stats.OrbHuntMinionKills or 0)
         orbHuntAllTimeLines.fail.Text = string.format("%s", stats.OrbHuntFailCount or 0)
         orbHuntAllTimeLines.rewards.Text = FormatRewardLines(stats.OrbHuntRewards,
             HALLOWEEN_REWARD_ORDER, HALLOWEEN_REWARD_COLORS)
@@ -4619,8 +4628,43 @@ do
         return selectorIsClickToMove(selector or getSelector())
     end
 
-    local function inner(shouldContinueFn)
-        if isClickToMoveNow() and not isMenuOpenNow() then
+    -- ✅ [버그 수정] "Click To Move가 꺼져 있을 때 Tab까지 가기 전에 ESC로 닫고 끝남"
+    -- 엔터를 눌러 메뉴 페이지가 바뀌는 동안 MenuIsOpen 값이 잠깐 false로 읽히는 순간이 있는데,
+    -- 기존엔 그 한 번만 보고 "메뉴가 닫혔다"고 판단해서 중간에 포기했다. 그러면 메뉴는 실제로
+    -- 열린 채로 남고, 다음 재시도가 "닫혀 있다"고 보고 ESC를 눌러서 그 메뉴를 닫아버렸다.
+    -- 이제는 1.5초 동안 계속 닫혀 있어야만 닫힌 걸로 보고, 중단할 때는 이유를 F9에 남긴다.
+    -- ✅ [사용자 요청] Click to Move 관련 로그는 F9에 안 띄운다 (디버깅이 필요하면 true로)
+    local CTM_LOG = false
+    local function ctmLog(fn, msg)
+        if CTM_LOG then fn(msg) end
+    end
+
+    local function menuStillOpen()
+        if isMenuOpenNow() then return true end
+        local start = tick()
+        while tick() - start < 1.5 do
+            task.wait(0.1)
+            if isMenuOpenNow() then return true end
+        end
+        return false
+    end
+
+    local function inner(shouldContinueFn, forceMenuCheck)
+        if not forceMenuCheck and isClickToMoveNow() and not isMenuOpenNow() then
+            return true
+        end
+
+        -- 중간 확인: 계속 진행 조건이 꺼졌으면 메뉴를 닫고 중단, 메뉴가 정말로 닫혔으면 그냥 중단
+        local function stepOk(stepName)
+            if not shouldContinueFn() then
+                ctmLog(print, "[Click to Move] " .. stepName .. " 단계에서 중단 - 다른 기능으로 넘어가야 해서 메뉴를 닫음")
+                closeMenu()
+                return false
+            end
+            if not menuStillOpen() then
+                ctmLog(warn, "[Click to Move] " .. stepName .. " 단계에서 메뉴가 닫혀 있음 - 중단")
+                return false
+            end
             return true
         end
 
@@ -4628,41 +4672,65 @@ do
         if not isMenuOpenNow() then
             pressKey(Enum.KeyCode.Escape, 0.1)
             if not waitMenuState(true, 3) then
+                ctmLog(warn, "[Click to Move] ESC를 눌러도 메뉴가 열리지 않음")
                 return false -- 안 열렸으면 더 누르지 않고 실패 (다음 시도는 쿨다운 후)
             end
         end
         task.wait(0.6) -- 메뉴 열리는 애니메이션이 끝날 시간
-        if not shouldContinueFn() then closeMenu(); return false end
+        if not stepOk("메뉴 열기") then return false end
 
         -- 2. ✅ [사용자 요청] 아래 키 3번 -> 엔터 1번 -> Tab 1번
+        -- (이 사이에는 메뉴 상태를 키마다 확인하지 않는다 - 페이지 전환 중 잘못 읽히는 걸 막기 위해)
         for _ = 1, 3 do
-            if not (shouldContinueFn() and isMenuOpenNow()) then break end
+            if not shouldContinueFn() then break end
             pressKey(Enum.KeyCode.Down, 0.1)
             task.wait(0.25)
         end
-        if not (shouldContinueFn() and isMenuOpenNow()) then closeMenu(); return false end
+        if not stepOk("아래 키 3번") then return false end
         task.wait(0.2)
         pressKey(Enum.KeyCode.Return, 0.1)
-        task.wait(0.7) -- 엔터 처리 대기
-        if not (shouldContinueFn() and isMenuOpenNow()) then closeMenu(); return false end
+        task.wait(0.8) -- 엔터 처리 대기
+        -- ✅ [버그 수정] 엔터를 누른 뒤에는 메뉴가 닫혀 있는 게 정상이다 (사용자 확인).
+        -- 기존엔 여기서 "메뉴가 닫혔다"고 보고 중단해서 Tab까지 못 갔다 -> 여기서는 메뉴 상태를 안 본다.
+        if not shouldContinueFn() then
+            ctmLog(print, "[Click to Move] 엔터 단계에서 중단 - 다른 기능으로 넘어가야 함")
+            closeMenu()
+            return false
+        end
 
         pressKey(Enum.KeyCode.Tab, 0.1)
-        task.wait(1) -- 탭 전환 대기
-        if not (shouldContinueFn() and isMenuOpenNow()) then closeMenu(); return false end
+        -- Tab 뒤에는 설정 화면이 열려야 한다 -> 열릴 때까지 최대 3초 확인
+        waitMenuState(true, 3)
+        task.wait(0.7) -- 탭 전환 대기
+        if not stepOk("Tab") then return false end
 
         -- 3. ✅ [사용자 요청] Tab 누른 뒤 다시 확인: 이미 Click To Move면 바로 ESC로 닫고 끝
+        -- (메뉴가 열려 있는 지금은 메뉴 화면 값이 최신이므로, 강제 확인 모드에서는 화면 값을 믿는다)
+        -- ✅ 메뉴가 열려 있는 지금은 화면 값이 최신이므로 화면 값을 우선 믿는다
+        -- (설정값이 실제와 다르게 읽히는 환경에서, 꺼져 있는데 "켜져 있다"고 보고 닫아버리는 것 방지)
         local selector = getSelector()
-        if isClickToMoveNow(selector) then
+        local alreadyOn
+        if selector then
+            alreadyOn = selectorIsClickToMove(selector)
+        else
+            alreadyOn = (not forceMenuCheck) and isClickToMoveNow(nil)
+        end
+        if alreadyOn then
+            ctmLog(print, "[Click to Move] Tab 후 확인 - 이미 Click To Move라서 메뉴를 닫음")
             closeMenu()
             return true
         end
-        if not selector then closeMenu(); return false end
+        if not selector then
+            ctmLog(warn, "[Click to Move] Tab 후 이동 방식(Movement Mode) 항목을 찾지 못함 - 중단")
+            closeMenu()
+            return false
+        end
 
         -- 4. Click To Move 항목이 Hover될 때까지 아래 키 (안 되면 위 키)
         local hoverSuccess = false
         for _, key in ipairs({ Enum.KeyCode.Down, Enum.KeyCode.Up }) do
             for _ = 1, 50 do
-                if not (shouldContinueFn() and isMenuOpenNow()) then break end
+                if not (shouldContinueFn() and menuStillOpen()) then break end
                 pressKey(key, 0.1)
                 task.wait(0.25)
                 if selector.GuiState == Enum.GuiState.Hover then
@@ -4670,14 +4738,14 @@ do
                     break
                 end
             end
-            if hoverSuccess or not (shouldContinueFn() and isMenuOpenNow()) then break end
+            if hoverSuccess or not (shouldContinueFn() and menuStillOpen()) then break end
         end
 
         -- 5. 오른쪽 키로 Click To Move 선택
         if hoverSuccess then
             for _ = 1, 30 do
-                if not (shouldContinueFn() and isMenuOpenNow()) then break end
-                if isClickToMoveSettingOn() or selectorIsClickToMove(selector) then
+                if not (shouldContinueFn() and menuStillOpen()) then break end
+                if selectorIsClickToMove(selector) or (not forceMenuCheck and isClickToMoveSettingOn()) then
                     task.wait(0.5)
                     closeMenu()
                     return true
@@ -4691,11 +4759,31 @@ do
         return false
     end
 
-    EnsureClickToMoveMode = function(shouldContinueFn)
+    -- ✅ [버그 수정] "Click to Move가 꺼져 있는데도 그냥 진행" - 설정값을 읽어서 "켜져 있다"고 나오면
+    -- 메뉴를 안 열고 바로 통과시켰는데, 실행기 환경에 따라 이 값이 실제와 다르게 읽히는 경우가 있었다.
+    -- 그래서 이제는 이동 함수들이 "클릭했는데 캐릭터가 전혀 안 움직임"을 확인하면 forceMenuCheck=true로
+    -- 다시 부른다. 이때는 설정값을 믿지 않고 메뉴를 직접 열어서(Tab 후 화면 값으로) 확인/설정한다.
+    -- 한 번 이렇게 설정값이 틀린 게 확인되면 이번 실행 동안은 설정값만 보고 통과시키지 않는다.
+    local loggedSetting = false
+    EnsureClickToMoveMode = function(shouldContinueFn, forceMenuCheck)
         if not shouldContinueFn() then return false end
 
+        if not loggedSetting then
+            loggedSetting = true
+            pcall(function()
+                ctmLog(print, string.format("[Click to Move] 게임 강제 설정: %s / 내 설정: %s",
+                    tostring(LocalPlayer.DevComputerMovementMode),
+                    tostring(UserSettings():GetService("UserGameSettings").ComputerMovementMode)))
+            end)
+        end
+        if forceMenuCheck and not getgenv()._ClickToMoveSettingUntrusted then
+            getgenv()._ClickToMoveSettingUntrusted = true
+            ctmLog(warn, "[Click to Move] 클릭해도 캐릭터가 안 움직임 - 메뉴에서 직접 확인/설정함")
+        end
+        local trustSetting = not forceMenuCheck and not getgenv()._ClickToMoveSettingUntrusted
+
         -- 이미 Click to Move면 메뉴를 아예 건드리지 않는다 (열려 있을 때만 닫음)
-        if isClickToMoveSettingOn() then
+        if trustSetting and isClickToMoveSettingOn() then
             closeMenu()
             return true
         end
@@ -4705,7 +4793,7 @@ do
         while getgenv()._ClickToMoveBusy and (tick() - waitStart) < 60 do
             task.wait(0.2)
         end
-        if isClickToMoveSettingOn() then return true end
+        if trustSetting and isClickToMoveSettingOn() then return true end
         if not shouldContinueFn() then return false end
 
         -- 방금 실패했으면 3초는 쉬었다가 다시 (실패 -> 즉시 재시도의 무한 반복 방지)
@@ -4719,9 +4807,9 @@ do
         end
 
         getgenv()._ClickToMoveBusy = true
-        local ok, result = pcall(inner, shouldContinueFn)
+        local ok, result = pcall(inner, shouldContinueFn, forceMenuCheck or not trustSetting)
         if not ok then
-            warn("[Click to Move 설정 오류] " .. tostring(result))
+            ctmLog(warn, "[Click to Move 설정 오류] " .. tostring(result))
             pcall(closeMenu)
         end
         getgenv()._ClickToMoveBusy = false
@@ -4733,7 +4821,7 @@ do
             getgenv()._ClickToMoveFailAt = tick()
             getgenv()._ClickToMoveFailStreak = (getgenv()._ClickToMoveFailStreak or 0) + 1
             if getgenv()._ClickToMoveFailStreak == 3 then
-                warn("[Click to Move] 설정을 3번 연속 실패 - 30초 동안 메뉴 조작을 멈춤 (설정에서 직접 Click To Move로 바꿔두면 해결됨)")
+                ctmLog(warn, "[Click to Move] 설정을 3번 연속 실패 - 30초 동안 메뉴 조작을 멈춤 (설정에서 직접 Click To Move로 바꿔두면 해결됨)")
             end
         end
         return success
@@ -4851,11 +4939,34 @@ local function MoveToPositionClickStyle(placePosition, placeName, shouldContinue
             continue
         end
 
+        local hrpBeforeClick = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        local posBeforeClick = hrpBeforeClick and hrpBeforeClick.Position
         local clicked = CameraLookDownAndClick(placePart.Position, shouldContinueFn)
         if not clicked then return false end
 
         if confirmArrival() then
             return true
+        end
+
+        -- ✅ [버그 수정] Click to Move가 실제로는 꺼져 있으면 클릭해도 캐릭터가 전혀 안 움직인다.
+        -- 2초 안에 3스터드도 못 움직였으면 메뉴에서 직접 확인/설정하고 이번 시도를 다시 한다.
+        do
+            local moved = false
+            local checkStart = tick()
+            while (tick() - checkStart) < 2 do
+                local hrpNow = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if hrpNow and posBeforeClick and (hrpNow.Position - posBeforeClick).Magnitude > 3 then
+                    moved = true
+                    break
+                end
+                if confirmArrival() then return true end
+                task.wait(0.1)
+            end
+            if not moved and posBeforeClick then
+                if not shouldContinueFn() then return false end
+                EnsureClickToMoveMode(shouldContinueFn, true)
+                continue
+            end
         end
 
         -- ✅ [사용자 요청] "점프 보정은 캐릭터가 아예 멈춰 있는 게 아니라, 5스터드를
@@ -7047,11 +7158,28 @@ RegisterSingleAction({
 local RunOrbHunt
 do
     local HCFG = {
-        AURA_NAME = "Eden",
+        -- ✅ [사용자 요청] 쓸 아우라 목록 (위에서부터 우선). Eden이 없으면 Glock을 쓴다.
+        --   tab: "Special"(Aura Storage 탭 Position {1,0},{0,0}) / "Regular"(Position {0,0},{0,0})
+        --   minionKeys / orbKeys: 돌아가며 누를 스킬
+        --   useVoidrush / useSniper: 보이드 러쉬(V, 게이지 30 이상) / 저격총(R, 콤보 V) 사용 여부
+        AURA_PROFILES = {
+            {
+                name = "Eden", tab = "Special",
+                minionKeys = { Enum.KeyCode.T, Enum.KeyCode.F, Enum.KeyCode.E, Enum.KeyCode.Q },
+                orbKeys = { Enum.KeyCode.T, Enum.KeyCode.F, Enum.KeyCode.E, Enum.KeyCode.Q },
+                useVoidrush = true, useSniper = true,
+            },
+            {
+                -- Glock: E(Melee) / F(Shoot) 번갈아 사용. 일반(Regular) 아우라.
+                name = "Glock", tab = "Regular",
+                minionKeys = { Enum.KeyCode.E, Enum.KeyCode.F },
+                orbKeys = { Enum.KeyCode.E, Enum.KeyCode.F },
+                useVoidrush = false, useSniper = false,
+            },
+        },
         ORB_NAMES = { "WINDY", "SNOWY", "RAINY", "SANDSTORM", "HELL", "STARFALL", "HEAVEN", "LOST FOREST", "CORRUPTION", "NULL" },
-        -- 미니언 잡을 때 / 오브 부술 때 누를 스킬
-        SKILL_KEYS = { Enum.KeyCode.T, Enum.KeyCode.F, Enum.KeyCode.E, Enum.KeyCode.Q },
-        ORB_SKILL_KEYS = { Enum.KeyCode.T, Enum.KeyCode.F, Enum.KeyCode.E, Enum.KeyCode.Q },
+        -- 정리할 때 떼어줄 모든 스킬 키
+        ALL_SKILL_KEYS = { Enum.KeyCode.T, Enum.KeyCode.F, Enum.KeyCode.E, Enum.KeyCode.Q, Enum.KeyCode.V },
         -- ✅ [사용자 요청] 보이드 러쉬(V): 오브 부술 때, StackUI.StackBar.StackText 숫자가 30 이상일 때만
         -- 다른 스킬들 사이에 섞어서 누른다 (R처럼 최우선은 아님)
         VOIDRUSH_KEY = Enum.KeyCode.V,
@@ -7188,7 +7316,7 @@ do
     end
 
     local function releaseInputs()
-        for _, key in ipairs(HCFG.ORB_SKILL_KEYS) do
+        for _, key in ipairs(HCFG.ALL_SKILL_KEYS) do
             pcall(function() VIM:SendKeyEvent(false, key, false, game) end)
         end
         pcall(function() VIM:SendKeyEvent(false, HCFG.VOIDRUSH_KEY, false, game) end)
@@ -7230,14 +7358,16 @@ do
     end
 
     -- ===== Eden 장착 =====
-    local function findSpecialTab(auraStorage)
+    -- Aura Storage 탭 버튼: Regular = Position {0,0},{0,0} / Special = Position {1,0},{0,0}
+    local function findAuraTab(auraStorage, tabName)
+        local xScale = (tabName == "Special") and 1 or 0
         local tabFrame = FindChildByPosition(auraStorage, "Frame", 0.995000005, 0.0900000036)
         if not tabFrame then return nil end
-        local btn = FindChildByPosition(tabFrame, "ImageButton", 1, 0)
+        local btn = FindChildByPosition(tabFrame, "ImageButton", xScale, 0)
         if btn then return btn end
         for _, desc in ipairs(tabFrame:GetDescendants()) do
             if desc:IsA("ImageButton")
-                and math.abs(desc.Position.X.Scale - 1) < 0.0001
+                and math.abs(desc.Position.X.Scale - xScale) < 0.0001
                 and math.abs(desc.Position.Y.Scale) < 0.0001 then
                 return desc
             end
@@ -7278,23 +7408,25 @@ do
         return label and label.Text or ""
     end
 
-    local edenEquipButton = nil -- 장착 확인 버튼 참조 (해제 감시용)
+    local auraEquipButton = nil -- 장착 확인 버튼 참조 (해제 감시용)
     local needReequip = false
+    local currentProfile = nil  -- 지금 쓰고 있는 아우라 (Eden / Glock)
 
-    local function equipEden()
-        local auraName = HCFG.AURA_NAME
+    -- 반환: 성공 여부, 메시지, notFound(목록에 그 아우라가 아예 없음)
+    local function equipAura(profile)
+        local auraName = profile.name
         local mainInterface = LocalPlayer.PlayerGui:FindFirstChild("MainInterface")
         local auraStorage = mainInterface and FindFrameByDescendantLabelText(mainInterface, "Aura Storage")
         if not auraStorage then return false, "Aura Storage 창을 찾지 못함" end
 
         local wasOpen = auraStorage.Visible
-        local ok, success, msg = pcall(function()
+        local ok, success, msg, notFound = pcall(function()
             auraStorage.Visible = true
             task.wait(0.5)
 
-            local special = findSpecialTab(auraStorage)
-            if not special then return false, "Special 탭 버튼을 찾지 못함" end
-            clickExactly(special)
+            local tabBtn = findAuraTab(auraStorage, profile.tab)
+            if not tabBtn then return false, profile.tab .. " 탭 버튼을 찾지 못함" end
+            clickExactly(tabBtn)
             task.wait(0.5)
 
             local auraBtn, list
@@ -7304,11 +7436,11 @@ do
                 if auraBtn then break end
                 if not reclicked and tick() - start > 2 then
                     reclicked = true
-                    clickExactly(special)
+                    clickExactly(tabBtn)
                 end
                 task.wait(0.25)
             end
-            if not auraBtn then return false, "Special 탭에서 " .. auraName .. " 을(를) 찾지 못함" end
+            if not auraBtn then return false, profile.tab .. " 탭에서 " .. auraName .. " 을(를) 찾지 못함", true end
 
             list.CanvasPosition = Vector2.new(0, math.max(0,
                 auraBtn.AbsolutePosition.Y - list.AbsolutePosition.Y + list.CanvasPosition.Y))
@@ -7318,7 +7450,7 @@ do
 
             local equip = findEquipButton(auraStorage)
             if not equip then return false, "장착(Equip) 버튼을 찾지 못함" end
-            edenEquipButton = equip
+            auraEquipButton = equip
             if buttonText(equip) == "Unequip" then return true, "이미 장착돼 있음" end
 
             for _ = 1, 3 do
@@ -7339,20 +7471,37 @@ do
         end
         if not ok then return false, "오류: " .. tostring(success) end
         if success then needReequip = false end
-        return success, msg
+        return success, msg, notFound
     end
 
-    local function ensureEden()
-        SetCurrentAction("오브 사냥 - " .. HCFG.AURA_NAME .. " 장착 확인 중")
+    -- ✅ [사용자 요청] Eden을 먼저 시도하고, 목록에 Eden이 아예 없으면 Glock을 쓴다.
+    -- (Eden이 있는데 다른 이유로 실패한 거면 Glock으로 넘어가지 않고 Eden을 다시 시도)
+    -- ✅ [사용자 요청] Eden이 없는 게 한 번 확인되면, 매크로를 껐다 켜기 전까지 Eden은 건너뛰고 Glock만 쓴다
+    -- (매크로 시작 토글을 켤 때 getgenv()._OrbHuntEdenMissing을 지워서 다시 Eden부터 확인)
+    local function ensureAura()
         for attempt = 1, 3 do
-            if not canProceed() then return false end
-            local ok, msg = equipEden()
-            if ok then
-                hlog(HCFG.AURA_NAME .. ": " .. tostring(msg))
-                task.wait(0.5) -- 렉 대비: 장착 반영될 시간
-                return true
+            for _, profile in ipairs(HCFG.AURA_PROFILES) do
+                if not canProceed() then return false end
+                if profile.name == "Eden" and getgenv()._OrbHuntEdenMissing then
+                    continue
+                end
+                SetCurrentAction("오브 사냥 - " .. profile.name .. " 장착 확인 중")
+                local ok, msg, notFound = equipAura(profile)
+                if not ok and notFound and profile.name == "Eden" and not getgenv()._OrbHuntEdenMissing then
+                    getgenv()._OrbHuntEdenMissing = true
+                    hlog("Eden이 없음 - 매크로를 다시 켜기 전까지 Glock만 사용")
+                end
+                if ok then
+                    if currentProfile ~= profile then
+                        hlog(profile.name .. " 사용: " .. tostring(msg))
+                    end
+                    currentProfile = profile
+                    task.wait(0.5) -- 렉 대비: 장착 반영될 시간
+                    return true
+                end
+                hwarn(profile.name .. " 장착 실패 (" .. attempt .. "/3) - " .. tostring(msg))
+                if not notFound then break end -- 있는데 실패 -> 같은 아우라로 다시 시도
             end
-            hwarn(HCFG.AURA_NAME .. " 장착 실패 (" .. attempt .. "/3) - " .. tostring(msg))
             task.wait(1)
         end
         return false
@@ -7607,7 +7756,6 @@ do
             if not (canProceed() and isValid()) then return false end
             if not waitForCharacter(canProceed) then return false end
             if not EnsureClickToMoveMode(canProceed) then
-                hwarn("Click to Move 설정 실패 (" .. attempt .. "/3)")
                 task.wait(1)
                 continue
             end
@@ -7615,6 +7763,7 @@ do
             SetCurrentAction(string.format("오브 사냥 - %s (%d/3)", label, attempt))
             startCamera()
             local clickedPos, lastClickTime = nil, 0
+            local idleReclicks = 0 -- 클릭했는데 안 움직여서 다시 클릭한 횟수
             local anchorPos, anchorTime = nil, tick()
             local jumped = false
             local insideSince = nil
@@ -7637,9 +7786,25 @@ do
                 else
                     insideSince = nil
                     local moving = flat(hrp.AssemblyLinearVelocity).Magnitude > 2
+                    if moving then idleReclicks = 0 end
+                    local idleAfterClick = clickedPos ~= nil and not moving
+                        and tick() - lastClickTime > HCFG.RECLICK_IDLE_TIME
+                    if idleAfterClick then
+                        idleReclicks = idleReclicks + 1
+                        -- ✅ [버그 수정] 클릭을 2번 해도 전혀 안 움직이면 Click to Move가 실제로 꺼져 있는 것 ->
+                        -- 메뉴에서 직접 확인/설정한 뒤 다시 클릭
+                        if idleReclicks >= 2 then
+                            stopCamera()
+                            local fixed = EnsureClickToMoveMode(canProceed, true)
+                            if not fixed then break end
+                            startCamera()
+                            idleReclicks = 0
+                            clickedPos = nil
+                        end
+                    end
                     local needClick = clickedPos == nil
                         or flat(targetPos - clickedPos).Magnitude > HCFG.RECLICK_MOVED_DIST
-                        or (not moving and tick() - lastClickTime > HCFG.RECLICK_IDLE_TIME)
+                        or idleAfterClick
                     if needClick then
                         task.wait(0.1) -- 카메라가 목표 위로 옮겨질 시간
                         rightClickCenter()
@@ -7775,10 +7940,14 @@ do
     end
 
     -- ===== 이벤트 통계용 알림 집계 =====
-    -- ✅ [사용자 요청] 오브/미니언을 잡으면 뜨는 알림(성공 여부 + 받은 보상)을 이벤트 통계에 반영.
-    -- 사냥 중이거나 사냥이 끝난 직후(20초)에 뜬 알림만 본다. 알림 텍스트는 F9에도 그대로 찍는다.
-    -- ⚠️ 정확한 알림 문구를 아직 모르기 때문에 아래 패턴은 임시값이다(문구를 알게 되면 여기만 고치면 됨).
-    getgenv()._OrbHuntNoticeWindowUntil = 0
+    -- ✅ [사용자 요청] 오브/미니언을 잡으면 뜨는 보상 알림을 이벤트 통계에 반영한다. 실제 알림 문구:
+    --   제목 "Orb Minion Awards" / 내용 "You earned 2 Hollow Points for defeating Holy Light."  -> 미니언
+    --   제목 "Orb Awards"        / 내용 "You earned 15 Hollow Points for defeating Holy Orb."  -> 오브
+    -- 기존 알림 프레임(ChildAdded)과, 혹시 다른 곳에 뜨는 경우를 위한 PlayerGui 감시 두 군데서 받고,
+    -- 같은 알림(내용 TextLabel)은 한 번만 센다.
+    getgenv()._OrbHuntNoticeWindowUntil = 0 -- (예전 버전 호환용, 지금은 안 씀)
+
+    local processedAwardLabels = setmetatable({}, { __mode = "k" })
 
     local function addOrbHuntReward(itemName, amount)
         itemName = (itemName or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -7790,54 +7959,106 @@ do
         stats.OrbHuntRewards[itemName] = (stats.OrbHuntRewards[itemName] or 0) + amount
     end
 
-    getgenv()._CountHalloweenNotice = function(child)
-        if not (child and child:IsA("Frame")) then return end
-        if tick() > (getgenv()._OrbHuntNoticeWindowUntil or 0) then return end
+    local function cleanText(t)
+        return ((t or ""):gsub("<[^>]->", ""))
+    end
 
-        local texts = {}
-        for _, desc in ipairs(child:GetDescendants()) do
-            if desc:IsA("TextLabel") and desc.Text ~= "" then
-                table.insert(texts, (desc.Text:gsub("<[^>]->", "")))
+    -- "You earned 15 Hollow Points for defeating Holy Orb." -> 15, "Hollow Points", "Holy Orb"
+    local function parseAwardText(t)
+        t = cleanText(t)
+        local amountStr, item, target = t:match("[Yy]ou earned%s+([%d,]+)%s+(.-)%s+for defeating%s+(.-)%s*[%.!]?%s*$")
+        if not amountStr then return nil end
+        local amount = tonumber((amountStr:gsub(",", "")))
+        if not amount then return nil end
+        return amount, item, target
+    end
+
+    -- 내용 라벨 근처(부모 쪽 3단계까지)에서 "... Awards" 제목을 찾는다
+    local function findAwardTitle(label)
+        local node = label.Parent
+        for _ = 1, 3 do
+            if not node or node == LocalPlayer.PlayerGui then break end
+            for _, d in ipairs(node:GetDescendants()) do
+                if d ~= label and d:IsA("TextLabel") then
+                    local tx = cleanText(d.Text)
+                    if tx:lower():find("awards") then return tx end
+                end
             end
+            node = node.Parent
         end
-        if #texts == 0 then return end
-        hlog("알림: " .. table.concat(texts, " | "))
+        return nil
+    end
 
-        local isSuccess, isFail, changed = false, false, false
-        for _, t in ipairs(texts) do
-            local lower = t:lower()
-            if lower:find("fail") or lower:find("실패") then
-                isFail = true
-            elseif lower:find("success") or lower:find("defeat") or lower:find("cleared")
-                or lower:find("killed") or lower:find("성공") then
-                isSuccess = true
-            end
+    local function handleAwardLabel(label)
+        if processedAwardLabels[label] then return true end
+        local amount, item, target = parseAwardText(label.Text)
+        if not amount then return false end
+        processedAwardLabels[label] = true
 
-            local amountStr, itemName = t:match("You've got (%d+)%s+(.-)!?$")
-            if not amountStr then
-                itemName = t:match("You've got an? (.-)[!%.]?$")
-                if itemName then amountStr = "1" end
-            end
-            if not amountStr then
-                amountStr, itemName = t:match("You've received (%d+)%s+(.-)!?$")
-            end
-            if amountStr and itemName then
-                addOrbHuntReward(itemName, tonumber(amountStr))
-                changed = true
-            end
+        local title = findAwardTitle(label) or ""
+        local titleLower = title:lower()
+        local isMinion
+        if titleLower:find("minion") then
+            isMinion = true
+        elseif titleLower:find("orb") then
+            isMinion = false
+        else
+            isMinion = not ((target or ""):lower():find("orb")) -- 제목을 못 찾으면 대상 이름으로 판단
         end
 
         local stats = getgenv()._AllTimeStats
-        if isFail then
-            getgenv().OrbHuntSessionFailCount = (getgenv().OrbHuntSessionFailCount or 0) + 1
-            stats.OrbHuntFailCount = (stats.OrbHuntFailCount or 0) + 1
-            changed = true
-        elseif isSuccess then
-            getgenv().OrbHuntSessionSuccessCount = (getgenv().OrbHuntSessionSuccessCount or 0) + 1
-            stats.OrbHuntSuccessCount = (stats.OrbHuntSuccessCount or 0) + 1
-            changed = true
+        if isMinion then
+            getgenv().OrbHuntSessionMinionKills = (getgenv().OrbHuntSessionMinionKills or 0) + 1
+            stats.OrbHuntMinionKills = (stats.OrbHuntMinionKills or 0) + 1
+        else
+            getgenv().OrbHuntSessionOrbKills = (getgenv().OrbHuntSessionOrbKills or 0) + 1
+            stats.OrbHuntOrbKills = (stats.OrbHuntOrbKills or 0) + 1
         end
-        if changed then getgenv()._SaveAllTimeStats() end
+        addOrbHuntReward(item, amount)
+        hlog(string.format("보상 알림: %s 처치 (%s) - %s %d개", isMinion and "미니언" or "오브",
+            tostring(target), tostring(item), amount))
+        pcall(getgenv()._SaveAllTimeStats)
+        return true
+    end
+
+    -- 기존 알림 프레임에서 새 알림이 생기면 호출됨 (글자가 늦게 채워질 수 있어서 잠깐 기다렸다가 확인)
+    getgenv()._CountHalloweenNotice = function(child)
+        if not child then return end
+        task.delay(0.2, function()
+            if not (child.Parent and Settings.Sols.masterMacroEnabled) then return end
+            pcall(function()
+                for _, desc in ipairs(child:GetDescendants()) do
+                    if desc:IsA("TextLabel") and handleAwardLabel(desc) then return end
+                end
+            end)
+        end)
+    end
+
+    -- 보상 알림이 다른 GUI에 뜨는 경우 대비: PlayerGui 전체에서 새로 생기는 TextLabel 확인
+    task.spawn(function()
+        local playerGui = LocalPlayer:WaitForChild("PlayerGui", 30)
+        if not playerGui then return end
+        -- 스크립트를 다시 실행했을 때 예전 연결이 남아 두 번 세는 것 방지
+        if getgenv()._OrbAwardConn then pcall(function() getgenv()._OrbAwardConn:Disconnect() end) end
+        getgenv()._OrbAwardConn = playerGui.DescendantAdded:Connect(function(d)
+            if not d:IsA("TextLabel") then return end
+            if not Settings.Sols.masterMacroEnabled then return end
+            task.delay(0.2, function()
+                if not d.Parent then return end
+                local tx = d.Text
+                if tx and tx:find("for defeating", 1, true) then
+                    pcall(handleAwardLabel, d)
+                end
+            end)
+        end)
+    end)
+
+    -- 사냥 시간 초과(오브를 못 잡음) -> 실패 1회
+    local function addOrbHuntFail()
+        getgenv().OrbHuntSessionFailCount = (getgenv().OrbHuntSessionFailCount or 0) + 1
+        local stats = getgenv()._AllTimeStats
+        stats.OrbHuntFailCount = (stats.OrbHuntFailCount or 0) + 1
+        pcall(getgenv()._SaveAllTimeStats)
     end
 
     -- ===== 사냥 본체 =====
@@ -7874,8 +8095,8 @@ do
         end
         if not canProceed() then return end
 
-        if not ensureEden() then
-            hwarn(HCFG.AURA_NAME .. " 장착을 못 해서 이번 오브는 잠시 뒤 다시 시도")
+        if not ensureAura() then
+            hwarn("Eden/Glock 장착을 못 해서 이번 오브는 잠시 뒤 다시 시도")
             return
         end
         local moved = clickMoveTo(function()
@@ -7920,7 +8141,7 @@ do
                 if not waitForCharacter(canKeepHunting) then break end
                 task.wait(1)
                 if Settings.Emergency then continue end
-                if needReequip and not ensureEden() then break end
+                if needReequip and not ensureAura() then break end
 
                 local minionsNow = getMinions(orbKey)
                 local myHrp = getHRP()
@@ -7953,7 +8174,7 @@ do
             -- Eden이 풀렸으면 다시 장착 (스킬은 잠시 멈춤)
             if needReequip then
                 stopWalking()
-                if not ensureEden() then break end
+                if not ensureAura() then break end
                 continue
             end
 
@@ -7999,7 +8220,8 @@ do
 
             -- 저격총: 오브를 칠 때만, 콤보 V가 화면에 보이면 거리 상관없이 바로.
             -- 콤보가 실제로 사라질 때까지(=발사될 때까지) R만 0.2초 간격으로 다시 누름(최대 2초).
-            if attackingOrb and tick() >= ultRetryAt and comboIsV() then
+            if attackingOrb and currentProfile and currentProfile.useSniper
+                and tick() >= ultRetryAt and comboIsV() then
                 hlog("콤보 V - 저격총(R) 사용")
                 SetCurrentAction("오브 사냥 - 저격총(R) 사용 중")
                 releaseInputs()
@@ -8062,9 +8284,10 @@ do
                 and tick() >= ultLockUntil
                 and not Settings.Emergency
             if canCast then
-                local keys = attackingOrb and HCFG.ORB_SKILL_KEYS or HCFG.SKILL_KEYS
-                -- 오브를 칠 때 게이지가 30 이상이면 보이드 러쉬(V)도 돌아가며 누르는 목록에 넣는다
-                if attackingOrb and readStackValue() >= HCFG.VOIDRUSH_MIN_STACK then
+                local profile = currentProfile or HCFG.AURA_PROFILES[1]
+                local keys = attackingOrb and profile.orbKeys or profile.minionKeys
+                -- 오브를 칠 때 게이지가 30 이상이면 보이드 러쉬(V)도 돌아가며 누르는 목록에 넣는다 (Eden만)
+                if attackingOrb and profile.useVoidrush and readStackValue() >= HCFG.VOIDRUSH_MIN_STACK then
                     keys = table.clone(keys)
                     table.insert(keys, HCFG.VOIDRUSH_KEY)
                 end
@@ -8077,7 +8300,8 @@ do
         end
 
         if canKeepHunting() and tick() >= deadline then
-            hwarn("사냥 시간(" .. HCFG.HUNT_TIMEOUT .. "초) 초과 - 이번 오브 종료")
+            hwarn("사냥 시간(" .. HCFG.HUNT_TIMEOUT .. "초) 초과 - 이번 오브 종료 (실패로 집계)")
+            addOrbHuntFail()
         elseif not canKeepHunting() then
             local blocked = otherPlayerBlocking()
             if blocked and toggleOn() then
@@ -8108,11 +8332,13 @@ do
         task.spawn(function()
             while watching do
                 task.wait(0.5)
-                if edenEquipButton then
-                    if not isAliveInst(edenEquipButton) then
-                        edenEquipButton = nil
-                    elseif buttonText(edenEquipButton) == "Equip" then
-                        if not needReequip then hwarn(HCFG.AURA_NAME .. " 해제 감지 - 다시 장착 예정") end
+                if auraEquipButton then
+                    if not isAliveInst(auraEquipButton) then
+                        auraEquipButton = nil
+                    elseif buttonText(auraEquipButton) == "Equip" then
+                        if not needReequip then
+                            hwarn((currentProfile and currentProfile.name or "아우라") .. " 해제 감지 - 다시 장착 예정")
+                        end
                         needReequip = true
                     end
                 end
@@ -8901,8 +9127,9 @@ getgenv()._AllTimeStats = {
     SeaItemSuccessCount = 0,
     SeaItemRewards = {}, -- 아이템명 -> 누적 개수
     -- ✅ [사용자 요청] "2026 Halloween" - 오브 & 미니언 자동 사냥 성공/실패 횟수, 얻은 보상들
-    OrbHuntSuccessCount = 0,
-    OrbHuntFailCount = 0,
+    OrbHuntOrbKills = 0,    -- "Orb Awards" 알림 수
+    OrbHuntMinionKills = 0, -- "Orb Minion Awards" 알림 수
+    OrbHuntFailCount = 0,   -- 사냥 시간 초과로 못 잡은 횟수
     OrbHuntRewards = {}, -- 아이템명 -> 누적 개수
 }
 
@@ -9516,6 +9743,25 @@ local function updateAutoBiomeUseState()
     end
 end
 
+-- ✅ [사용자 요청] 낚시 위치 여러 곳 - 기타 설정 탭의 "낚시 위치" 드롭다운에서 고른 자리에서만 낚시한다.
+-- (자동으로 자리를 옮기지 않음). 1번이 원래 쓰던 자리(Place1).
+getgenv()._FishingSpots = {
+    Vector3.new(72.6785, 87.0000, -351.9299), -- 1. 원래 자리
+    Vector3.new(67.2111, 87.0000, -342.8269), -- 2
+    Vector3.new(68.8551, 87.0000, -333.0687), -- 3
+    Vector3.new(70.5976, 88.0200, -322.6544), -- 4
+    Vector3.new(64.9961, 88.0000, -311.1653), -- 5
+}
+getgenv()._FishingSpotIndex = getgenv()._FishingSpotIndex or 1
+
+-- 반환: 위치(Vector3), 번호
+getgenv()._ChooseFishingSpot = function()
+    local spots = getgenv()._FishingSpots
+    local idx = getgenv()._FishingSpotIndex or 1
+    if not spots[idx] then idx = 1 end
+    return spots[idx], idx
+end
+
 local autoFishConnection = nil
 Settings.Sols.autoFishReady = false
 Settings.Sols.autoFishActive = false
@@ -9801,7 +10047,9 @@ local function updateAutoFishState()
                             end
 
                             -- ! - 1
-                            SetCurrentAction("낚시 - Place1에서 낚싯대 던지는 중")
+                            -- ✅ [사용자 요청] 낚시 위치 여러 곳 중 이번에 쓸 자리 고르기
+                            local fishingSpotPos, fishingSpotNum = getgenv()._ChooseFishingSpot()
+                            SetCurrentAction(string.format("낚시 - %d번 자리에서 낚싯대 던지는 중", fishingSpotNum))
                             -- ✅ [치명적 버그 수정] "이동 방식 및 Click to Move 설정이
                             -- 자동 낚시가 사용하는 방식을 그대로 따라가지 않음" - 정확히는
                             -- 반대였다. 낚시의 Place1 캐스팅 이동이, 다른 기능들(레어
@@ -9813,16 +10061,15 @@ local function updateAutoFishState()
                             -- 있었다. 완전히 공통 함수로 교체해서 모든 이동 로직이 동일한
                             -- 방식을 따르게 한다. (기존에 local p1이 완전히 똑같이 두 번
                             -- 선언되어 있던 잔여 버그도 함께 정리)
-                            local p1 = workspace:FindFirstChild("ScriptParts") and
-                                workspace.ScriptParts:FindFirstChild("Place1")
-                            local place1TargetPos = p1 and p1.Position or Vector3.new(72.6785, 87.0000, -351.9299)
+                            local place1TargetPos = fishingSpotPos
 
                             local function shouldContinueFishing()
                                 return Settings.Sols.autoFishActive
                             end
 
+                            -- skipCache=true: 자리가 바뀔 수 있으니 매번 고른 좌표로 이동 목표를 갱신
                             local touched = MoveToPositionClickStyle(place1TargetPos, "Place1", shouldContinueFishing,
-                                "낚시")
+                                "낚시", true)
                             lastActivityTime = tick() -- [ACT] Phase1 cast
 
                             local skipToPhase2 = not touched
@@ -10596,6 +10843,7 @@ MacroToggle = SolTab.Toggle({
         -- (먼저 지워버리면 종료 웹훅이 작동 시간을 계산할 수 없게 됨).
         if v then
             getgenv().MacroStartTime = tick()
+            getgenv()._OrbHuntEdenMissing = nil -- 매크로를 다시 켜면 Eden부터 다시 확인
         end
         updateBiomeMacroState()
         updateAutoBiomeUseState()
@@ -10962,6 +11210,20 @@ EtcSettingTab.Toggle({
     Enabled = Settings.Sols.useBiomeRandomizerItem,
     Callback = function(v)
         Settings.Sols.useBiomeRandomizerItem = v
+    end
+})
+
+-- ✅ [사용자 요청] 낚시 위치 선택 드롭다운 (1번 = 원래 자리)
+EtcSettingTab.Label({ Text = "자동 낚시" })
+
+EtcSettingTab.Dropdown({
+    Text = "낚시 위치",
+    Options = { "1번 (기본)", "2번", "3번", "4번", "5번" },
+    Callback = function(value)
+        local num = tonumber(tostring(value or ""):match("%d+"))
+        if num and getgenv()._FishingSpots[num] then
+            getgenv()._FishingSpotIndex = num
+        end
     end
 })
 
