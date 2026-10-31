@@ -4549,6 +4549,33 @@ local function EnsureClickToMoveMode(shouldContinueFn)
         return ok and v == true
     end
 
+    -- ✅ [버그 수정] "이미 Click to Move가 켜져 있는데 자꾸 ESC를 누름" - 예전엔 "지금 Click to
+    -- Move인가"를 설정 메뉴 UI(Selector.Selection3의 위치)로만 확인했다. 그런데 메뉴가 닫혀 있을
+    -- 때는 그 UI가 없거나 최신 상태가 아닐 수 있어서, 이미 켜져 있어도 "아니다"로 판단하고 매번
+    -- ESC로 메뉴를 열었다(지난번에 넣은 "Tab 후 다시 확인 -> ESC로 닫기" 때문에 열고 닫기가 매번
+    -- 반복돼 보였음). 이제는 메뉴 UI 대신 실제 게임 설정값(UserGameSettings.ComputerMovementMode)을
+    -- 먼저 읽어서, 이미 Click to Move면 메뉴를 아예 건드리지 않는다.
+    local function isClickToMoveSettingOn()
+        local ok, on = pcall(function()
+            local dev = LocalPlayer.DevComputerMovementMode
+            if dev == Enum.DevComputerMovementMode.ClickToMove then return true end -- 게임이 강제로 Click to Move
+            if dev ~= Enum.DevComputerMovementMode.UserChoice then return false end
+            local ugs = UserSettings():GetService("UserGameSettings")
+            return ugs.ComputerMovementMode == Enum.ComputerMovementMode.ClickToMove
+        end)
+        return ok and on == true
+    end
+
+    if isClickToMoveSettingOn() then
+        -- 메뉴가 실제로 열려 있을 때만 닫는다 (닫혀 있으면 ESC를 절대 안 누름)
+        if isMenuOpenNow() then
+            vim:SendKeyEvent(true, Enum.KeyCode.Escape, false, game)
+            task.wait(1.5)
+            vim:SendKeyEvent(false, Enum.KeyCode.Escape, false, game)
+        end
+        return true
+    end
+
     local success, result = pcall(function()
         local basePage = coreGui.RobloxGui.SettingsClippingShield.SettingsShield.MenuContainer.Page
             .PageViewClipper.PageView.PageViewInnerFrame.Page
@@ -4617,10 +4644,10 @@ local function EnsureClickToMoveMode(shouldContinueFn)
     end)
 
     -- ✅ [사용자 요청] Tab을 누른 뒤 다시 한 번 확인: 이미 Click To Move면 바로 ESC로 창을 닫고 끝낸다.
-    if selector then
+    do
         local s3Now = nil
-        pcall(function() s3Now = selector.Selection3 end)
-        if s3Now and s3Now.Position == UDim2.new(0, 32, 0, 0) then
+        if selector then pcall(function() s3Now = selector.Selection3 end) end
+        if isClickToMoveSettingOn() or (s3Now and s3Now.Position == UDim2.new(0, 32, 0, 0)) then
             if isMenuOpenNow() then
                 vim:SendKeyEvent(true, Enum.KeyCode.Escape, false, game)
                 task.wait(1.5)
