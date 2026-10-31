@@ -7049,9 +7049,13 @@ do
     local HCFG = {
         AURA_NAME = "Eden",
         ORB_NAMES = { "WINDY", "SNOWY", "RAINY", "SANDSTORM", "HELL", "STARFALL", "HEAVEN", "LOST FOREST", "CORRUPTION", "NULL" },
-        -- 미니언 잡을 때 / 오브 부술 때 누를 스킬 (V는 오브 부술 때만)
+        -- 미니언 잡을 때 / 오브 부술 때 누를 스킬
         SKILL_KEYS = { Enum.KeyCode.T, Enum.KeyCode.F, Enum.KeyCode.E, Enum.KeyCode.Q },
-        ORB_SKILL_KEYS = { Enum.KeyCode.T, Enum.KeyCode.F, Enum.KeyCode.E, Enum.KeyCode.Q, Enum.KeyCode.V },
+        ORB_SKILL_KEYS = { Enum.KeyCode.T, Enum.KeyCode.F, Enum.KeyCode.E, Enum.KeyCode.Q },
+        -- ✅ [사용자 요청] 보이드 러쉬(V): 오브 부술 때, StackUI.StackBar.StackText 숫자가 30 이상일 때만
+        -- 다른 스킬들 사이에 섞어서 누른다 (R처럼 최우선은 아님)
+        VOIDRUSH_KEY = Enum.KeyCode.V,
+        VOIDRUSH_MIN_STACK = 30,
         ULT_KEY = Enum.KeyCode.R,      -- Combo가 "V"일 때 쓰는 저격총 (오브 부술 때만)
         ULT_LOCK_TIME = 0.8,           -- R을 쏜 뒤 다른 스킬을 쉬는 시간
         SKILL_GAP = 0.12,              -- 스킬 키 사이 간격(초)
@@ -7187,6 +7191,7 @@ do
         for _, key in ipairs(HCFG.ORB_SKILL_KEYS) do
             pcall(function() VIM:SendKeyEvent(false, key, false, game) end)
         end
+        pcall(function() VIM:SendKeyEvent(false, HCFG.VOIDRUSH_KEY, false, game) end)
         pcall(function() VIM:SendKeyEvent(false, HCFG.ULT_KEY, false, game) end)
         pcall(function()
             local cam = workspace.CurrentCamera
@@ -7563,6 +7568,16 @@ do
         local combo = stackUI and stackUI:FindFirstChild("Combo", true)
         if not combo then return nil end
         return combo:FindFirstChild("Level", true) or combo:FindFirstChildWhichIsA("TextLabel", true)
+    end
+
+    -- 보이드 러쉬용 게이지: PlayerGui.StackUI.StackBar.StackText 의 숫자 (못 읽으면 0)
+    local function readStackValue()
+        local ok, text = pcall(function()
+            return LocalPlayer.PlayerGui.StackUI.StackBar.StackText.Text
+        end)
+        if not (ok and type(text) == "string") then return 0 end
+        local num = text:gsub("<[^>]->", ""):match("%d+")
+        return tonumber(num) or 0
     end
 
     -- 저격총을 쏘면 Combo가 사라지는데(Visible 꺼짐) Level 글자는 V로 남으므로, 화면에 보일 때만 인정
@@ -8048,6 +8063,11 @@ do
                 and not Settings.Emergency
             if canCast then
                 local keys = attackingOrb and HCFG.ORB_SKILL_KEYS or HCFG.SKILL_KEYS
+                -- 오브를 칠 때 게이지가 30 이상이면 보이드 러쉬(V)도 돌아가며 누르는 목록에 넣는다
+                if attackingOrb and readStackValue() >= HCFG.VOIDRUSH_MIN_STACK then
+                    keys = table.clone(keys)
+                    table.insert(keys, HCFG.VOIDRUSH_KEY)
+                end
                 tapKey(keys[(skillIndex - 1) % #keys + 1], 0.03)
                 skillIndex = skillIndex + 1
                 task.wait(HCFG.SKILL_GAP)
