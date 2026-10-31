@@ -116,6 +116,7 @@ if getgenv then
     getgenv()._ClickToMoveFailStreak = 0
     getgenv()._ClickToMoveFailAt = nil
     getgenv()._ClickToMoveSettingUntrusted = nil
+    getgenv()._OrbHuntEdenMissing = nil
 end
 
 -- ✅ [사용자 요청] 스크립트를 켜면 즉시 로딩 바가 뜨고, 상태 UI가 준비되면 사라진다.
@@ -2737,20 +2738,25 @@ do
         local header = createStatsLine(-18, 24, parentFrame)
         header.Text = string.format('<font color="%s">[ 오브 &amp; 미니언 자동 사냥 ]</font>', getgenv()._VALUE_COLOR)
 
-        local successHeader = createStatsLine(-17, 22, parentFrame)
-        successHeader.Text = string.format('<font color="%s">성공 횟수</font>', getgenv()._LABEL_COLOR)
-        local successValue = createStatsLine(-16, 22, parentFrame)
+        -- ✅ [사용자 요청] 보상 알림("Orb Awards" / "Orb Minion Awards") 기준으로 오브/미니언 처치를 따로 센다
+        local orbHeader = createStatsLine(-17, 22, parentFrame)
+        orbHeader.Text = string.format('<font color="%s">오브 처치 횟수</font>', getgenv()._LABEL_COLOR)
+        local orbValue = createStatsLine(-16, 22, parentFrame)
 
-        local failHeader = createStatsLine(-15, 22, parentFrame)
-        failHeader.Text = string.format('<font color="%s">실패 횟수</font>', getgenv()._LABEL_COLOR)
-        local failValue = createStatsLine(-14, 22, parentFrame)
+        local minionHeader = createStatsLine(-15, 22, parentFrame)
+        minionHeader.Text = string.format('<font color="%s">미니언 처치 횟수</font>', getgenv()._LABEL_COLOR)
+        local minionValue = createStatsLine(-14, 22, parentFrame)
 
-        local rewardsHeader = createStatsLine(-13, 22, parentFrame)
+        local failHeader = createStatsLine(-13, 22, parentFrame)
+        failHeader.Text = string.format('<font color="%s">실패 횟수 (시간 초과)</font>', getgenv()._LABEL_COLOR)
+        local failValue = createStatsLine(-12, 22, parentFrame)
+
+        local rewardsHeader = createStatsLine(-11, 22, parentFrame)
         rewardsHeader.Text = string.format('<font color="%s">얻은 보상들</font>', getgenv()._LABEL_COLOR)
-        local rewardsValue = createStatsLine(-12, 22, parentFrame)
+        local rewardsValue = createStatsLine(-10, 22, parentFrame)
         rewardsValue.TextWrapped = true
 
-        return { success = successValue, fail = failValue, rewards = rewardsValue }
+        return { orb = orbValue, minion = minionValue, fail = failValue, rewards = rewardsValue }
     end
     local orbHuntSessionLines = buildOrbHuntStatsLines(EventStatsFrame)
     local orbHuntAllTimeLines = buildOrbHuntStatsLines(EventAllTimeStatsFrame)
@@ -2760,8 +2766,8 @@ do
 
     -- ✅ 보상 목록 정렬 순서/색상 - 할로윈 보상 이름을 알게 되면 여기에 추가하면 된다.
     -- 목록에 없는 아이템은 이름 기준 알파벳 순, 색상이 없는 아이템은 흰색으로 표시된다.
-    local HALLOWEEN_REWARD_ORDER = {}
-    local HALLOWEEN_REWARD_COLORS = {}
+    local HALLOWEEN_REWARD_ORDER = { "Hollow Points" }
+    local HALLOWEEN_REWARD_COLORS = { ["Hollow Points"] = "#FF8C1A" }
 
     -- ✅ [사용자 요청] 지정된 순서(orderList)대로 정렬하고, 목록에 없는 아이템은 그
     -- 뒤에 이름 기준 알파벳 순으로 붙인다. 각 아이템은 colorTable에 지정된 색상으로
@@ -2802,7 +2808,8 @@ do
 
     -- 세션 통계는 getgenv()의 세션 전용 카운터에서 읽어온다.
     getgenv()._UpdateEventStatsUI = function()
-        orbHuntSessionLines.success.Text = string.format("%s", getgenv().OrbHuntSessionSuccessCount or 0)
+        orbHuntSessionLines.orb.Text = string.format("%s", getgenv().OrbHuntSessionOrbKills or 0)
+        orbHuntSessionLines.minion.Text = string.format("%s", getgenv().OrbHuntSessionMinionKills or 0)
         orbHuntSessionLines.fail.Text = string.format("%s", getgenv().OrbHuntSessionFailCount or 0)
         orbHuntSessionLines.rewards.Text = FormatRewardLines(getgenv().OrbHuntSessionRewards,
             HALLOWEEN_REWARD_ORDER, HALLOWEEN_REWARD_COLORS)
@@ -2812,7 +2819,8 @@ do
     -- _AllTimeStats(디스크 저장, 영구 누적)를 읽어온다.
     getgenv()._UpdateEventAllTimeStatsUI = function()
         local stats = getgenv()._AllTimeStats
-        orbHuntAllTimeLines.success.Text = string.format("%s", stats.OrbHuntSuccessCount or 0)
+        orbHuntAllTimeLines.orb.Text = string.format("%s", stats.OrbHuntOrbKills or 0)
+        orbHuntAllTimeLines.minion.Text = string.format("%s", stats.OrbHuntMinionKills or 0)
         orbHuntAllTimeLines.fail.Text = string.format("%s", stats.OrbHuntFailCount or 0)
         orbHuntAllTimeLines.rewards.Text = FormatRewardLines(stats.OrbHuntRewards,
             HALLOWEEN_REWARD_ORDER, HALLOWEEN_REWARD_COLORS)
@@ -4620,8 +4628,37 @@ do
         return selectorIsClickToMove(selector or getSelector())
     end
 
+    -- ✅ [버그 수정] "Click To Move가 꺼져 있을 때 Tab까지 가기 전에 ESC로 닫고 끝남"
+    -- 엔터를 눌러 메뉴 페이지가 바뀌는 동안 MenuIsOpen 값이 잠깐 false로 읽히는 순간이 있는데,
+    -- 기존엔 그 한 번만 보고 "메뉴가 닫혔다"고 판단해서 중간에 포기했다. 그러면 메뉴는 실제로
+    -- 열린 채로 남고, 다음 재시도가 "닫혀 있다"고 보고 ESC를 눌러서 그 메뉴를 닫아버렸다.
+    -- 이제는 1.5초 동안 계속 닫혀 있어야만 닫힌 걸로 보고, 중단할 때는 이유를 F9에 남긴다.
+    local function menuStillOpen()
+        if isMenuOpenNow() then return true end
+        local start = tick()
+        while tick() - start < 1.5 do
+            task.wait(0.1)
+            if isMenuOpenNow() then return true end
+        end
+        return false
+    end
+
     local function inner(shouldContinueFn, forceMenuCheck)
         if not forceMenuCheck and isClickToMoveNow() and not isMenuOpenNow() then
+            return true
+        end
+
+        -- 중간 확인: 계속 진행 조건이 꺼졌으면 메뉴를 닫고 중단, 메뉴가 정말로 닫혔으면 그냥 중단
+        local function stepOk(stepName)
+            if not shouldContinueFn() then
+                print("[Click to Move] " .. stepName .. " 단계에서 중단 - 다른 기능으로 넘어가야 해서 메뉴를 닫음")
+                closeMenu()
+                return false
+            end
+            if not menuStillOpen() then
+                warn("[Click to Move] " .. stepName .. " 단계에서 메뉴가 닫혀 있음 - 중단")
+                return false
+            end
             return true
         end
 
@@ -4629,48 +4666,57 @@ do
         if not isMenuOpenNow() then
             pressKey(Enum.KeyCode.Escape, 0.1)
             if not waitMenuState(true, 3) then
+                warn("[Click to Move] ESC를 눌러도 메뉴가 열리지 않음")
                 return false -- 안 열렸으면 더 누르지 않고 실패 (다음 시도는 쿨다운 후)
             end
         end
         task.wait(0.6) -- 메뉴 열리는 애니메이션이 끝날 시간
-        if not shouldContinueFn() then closeMenu(); return false end
+        if not stepOk("메뉴 열기") then return false end
 
         -- 2. ✅ [사용자 요청] 아래 키 3번 -> 엔터 1번 -> Tab 1번
+        -- (이 사이에는 메뉴 상태를 키마다 확인하지 않는다 - 페이지 전환 중 잘못 읽히는 걸 막기 위해)
         for _ = 1, 3 do
-            if not (shouldContinueFn() and isMenuOpenNow()) then break end
+            if not shouldContinueFn() then break end
             pressKey(Enum.KeyCode.Down, 0.1)
             task.wait(0.25)
         end
-        if not (shouldContinueFn() and isMenuOpenNow()) then closeMenu(); return false end
+        if not stepOk("아래 키 3번") then return false end
         task.wait(0.2)
         pressKey(Enum.KeyCode.Return, 0.1)
-        task.wait(0.7) -- 엔터 처리 대기
-        if not (shouldContinueFn() and isMenuOpenNow()) then closeMenu(); return false end
+        task.wait(0.8) -- 엔터 처리(페이지 전환) 대기
+        if not stepOk("엔터") then return false end
 
         pressKey(Enum.KeyCode.Tab, 0.1)
         task.wait(1) -- 탭 전환 대기
-        if not (shouldContinueFn() and isMenuOpenNow()) then closeMenu(); return false end
+        if not stepOk("Tab") then return false end
 
         -- 3. ✅ [사용자 요청] Tab 누른 뒤 다시 확인: 이미 Click To Move면 바로 ESC로 닫고 끝
         -- (메뉴가 열려 있는 지금은 메뉴 화면 값이 최신이므로, 강제 확인 모드에서는 화면 값을 믿는다)
+        -- ✅ 메뉴가 열려 있는 지금은 화면 값이 최신이므로 화면 값을 우선 믿는다
+        -- (설정값이 실제와 다르게 읽히는 환경에서, 꺼져 있는데 "켜져 있다"고 보고 닫아버리는 것 방지)
         local selector = getSelector()
         local alreadyOn
-        if forceMenuCheck and selector then
+        if selector then
             alreadyOn = selectorIsClickToMove(selector)
         else
-            alreadyOn = isClickToMoveNow(selector)
+            alreadyOn = (not forceMenuCheck) and isClickToMoveNow(nil)
         end
         if alreadyOn then
+            print("[Click to Move] Tab 후 확인 - 이미 Click To Move라서 메뉴를 닫음")
             closeMenu()
             return true
         end
-        if not selector then closeMenu(); return false end
+        if not selector then
+            warn("[Click to Move] Tab 후 이동 방식(Movement Mode) 항목을 찾지 못함 - 중단")
+            closeMenu()
+            return false
+        end
 
         -- 4. Click To Move 항목이 Hover될 때까지 아래 키 (안 되면 위 키)
         local hoverSuccess = false
         for _, key in ipairs({ Enum.KeyCode.Down, Enum.KeyCode.Up }) do
             for _ = 1, 50 do
-                if not (shouldContinueFn() and isMenuOpenNow()) then break end
+                if not (shouldContinueFn() and menuStillOpen()) then break end
                 pressKey(key, 0.1)
                 task.wait(0.25)
                 if selector.GuiState == Enum.GuiState.Hover then
@@ -4678,13 +4724,13 @@ do
                     break
                 end
             end
-            if hoverSuccess or not (shouldContinueFn() and isMenuOpenNow()) then break end
+            if hoverSuccess or not (shouldContinueFn() and menuStillOpen()) then break end
         end
 
         -- 5. 오른쪽 키로 Click To Move 선택
         if hoverSuccess then
             for _ = 1, 30 do
-                if not (shouldContinueFn() and isMenuOpenNow()) then break end
+                if not (shouldContinueFn() and menuStillOpen()) then break end
                 if selectorIsClickToMove(selector) or (not forceMenuCheck and isClickToMoveSettingOn()) then
                     task.wait(0.5)
                     closeMenu()
@@ -7416,12 +7462,21 @@ do
 
     -- ✅ [사용자 요청] Eden을 먼저 시도하고, 목록에 Eden이 아예 없으면 Glock을 쓴다.
     -- (Eden이 있는데 다른 이유로 실패한 거면 Glock으로 넘어가지 않고 Eden을 다시 시도)
+    -- ✅ [사용자 요청] Eden이 없는 게 한 번 확인되면, 매크로를 껐다 켜기 전까지 Eden은 건너뛰고 Glock만 쓴다
+    -- (매크로 시작 토글을 켤 때 getgenv()._OrbHuntEdenMissing을 지워서 다시 Eden부터 확인)
     local function ensureAura()
         for attempt = 1, 3 do
             for _, profile in ipairs(HCFG.AURA_PROFILES) do
                 if not canProceed() then return false end
+                if profile.name == "Eden" and getgenv()._OrbHuntEdenMissing then
+                    continue
+                end
                 SetCurrentAction("오브 사냥 - " .. profile.name .. " 장착 확인 중")
                 local ok, msg, notFound = equipAura(profile)
+                if not ok and notFound and profile.name == "Eden" and not getgenv()._OrbHuntEdenMissing then
+                    getgenv()._OrbHuntEdenMissing = true
+                    hlog("Eden이 없음 - 매크로를 다시 켜기 전까지 Glock만 사용")
+                end
                 if ok then
                     if currentProfile ~= profile then
                         hlog(profile.name .. " 사용: " .. tostring(msg))
@@ -7872,10 +7927,14 @@ do
     end
 
     -- ===== 이벤트 통계용 알림 집계 =====
-    -- ✅ [사용자 요청] 오브/미니언을 잡으면 뜨는 알림(성공 여부 + 받은 보상)을 이벤트 통계에 반영.
-    -- 사냥 중이거나 사냥이 끝난 직후(20초)에 뜬 알림만 본다. 알림 텍스트는 F9에도 그대로 찍는다.
-    -- ⚠️ 정확한 알림 문구를 아직 모르기 때문에 아래 패턴은 임시값이다(문구를 알게 되면 여기만 고치면 됨).
-    getgenv()._OrbHuntNoticeWindowUntil = 0
+    -- ✅ [사용자 요청] 오브/미니언을 잡으면 뜨는 보상 알림을 이벤트 통계에 반영한다. 실제 알림 문구:
+    --   제목 "Orb Minion Awards" / 내용 "You earned 2 Hollow Points for defeating Holy Light."  -> 미니언
+    --   제목 "Orb Awards"        / 내용 "You earned 15 Hollow Points for defeating Holy Orb."  -> 오브
+    -- 기존 알림 프레임(ChildAdded)과, 혹시 다른 곳에 뜨는 경우를 위한 PlayerGui 감시 두 군데서 받고,
+    -- 같은 알림(내용 TextLabel)은 한 번만 센다.
+    getgenv()._OrbHuntNoticeWindowUntil = 0 -- (예전 버전 호환용, 지금은 안 씀)
+
+    local processedAwardLabels = setmetatable({}, { __mode = "k" })
 
     local function addOrbHuntReward(itemName, amount)
         itemName = (itemName or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -7887,54 +7946,106 @@ do
         stats.OrbHuntRewards[itemName] = (stats.OrbHuntRewards[itemName] or 0) + amount
     end
 
-    getgenv()._CountHalloweenNotice = function(child)
-        if not (child and child:IsA("Frame")) then return end
-        if tick() > (getgenv()._OrbHuntNoticeWindowUntil or 0) then return end
+    local function cleanText(t)
+        return ((t or ""):gsub("<[^>]->", ""))
+    end
 
-        local texts = {}
-        for _, desc in ipairs(child:GetDescendants()) do
-            if desc:IsA("TextLabel") and desc.Text ~= "" then
-                table.insert(texts, (desc.Text:gsub("<[^>]->", "")))
+    -- "You earned 15 Hollow Points for defeating Holy Orb." -> 15, "Hollow Points", "Holy Orb"
+    local function parseAwardText(t)
+        t = cleanText(t)
+        local amountStr, item, target = t:match("[Yy]ou earned%s+([%d,]+)%s+(.-)%s+for defeating%s+(.-)%s*[%.!]?%s*$")
+        if not amountStr then return nil end
+        local amount = tonumber((amountStr:gsub(",", "")))
+        if not amount then return nil end
+        return amount, item, target
+    end
+
+    -- 내용 라벨 근처(부모 쪽 3단계까지)에서 "... Awards" 제목을 찾는다
+    local function findAwardTitle(label)
+        local node = label.Parent
+        for _ = 1, 3 do
+            if not node or node == LocalPlayer.PlayerGui then break end
+            for _, d in ipairs(node:GetDescendants()) do
+                if d ~= label and d:IsA("TextLabel") then
+                    local tx = cleanText(d.Text)
+                    if tx:lower():find("awards") then return tx end
+                end
             end
+            node = node.Parent
         end
-        if #texts == 0 then return end
-        hlog("알림: " .. table.concat(texts, " | "))
+        return nil
+    end
 
-        local isSuccess, isFail, changed = false, false, false
-        for _, t in ipairs(texts) do
-            local lower = t:lower()
-            if lower:find("fail") or lower:find("실패") then
-                isFail = true
-            elseif lower:find("success") or lower:find("defeat") or lower:find("cleared")
-                or lower:find("killed") or lower:find("성공") then
-                isSuccess = true
-            end
+    local function handleAwardLabel(label)
+        if processedAwardLabels[label] then return true end
+        local amount, item, target = parseAwardText(label.Text)
+        if not amount then return false end
+        processedAwardLabels[label] = true
 
-            local amountStr, itemName = t:match("You've got (%d+)%s+(.-)!?$")
-            if not amountStr then
-                itemName = t:match("You've got an? (.-)[!%.]?$")
-                if itemName then amountStr = "1" end
-            end
-            if not amountStr then
-                amountStr, itemName = t:match("You've received (%d+)%s+(.-)!?$")
-            end
-            if amountStr and itemName then
-                addOrbHuntReward(itemName, tonumber(amountStr))
-                changed = true
-            end
+        local title = findAwardTitle(label) or ""
+        local titleLower = title:lower()
+        local isMinion
+        if titleLower:find("minion") then
+            isMinion = true
+        elseif titleLower:find("orb") then
+            isMinion = false
+        else
+            isMinion = not ((target or ""):lower():find("orb")) -- 제목을 못 찾으면 대상 이름으로 판단
         end
 
         local stats = getgenv()._AllTimeStats
-        if isFail then
-            getgenv().OrbHuntSessionFailCount = (getgenv().OrbHuntSessionFailCount or 0) + 1
-            stats.OrbHuntFailCount = (stats.OrbHuntFailCount or 0) + 1
-            changed = true
-        elseif isSuccess then
-            getgenv().OrbHuntSessionSuccessCount = (getgenv().OrbHuntSessionSuccessCount or 0) + 1
-            stats.OrbHuntSuccessCount = (stats.OrbHuntSuccessCount or 0) + 1
-            changed = true
+        if isMinion then
+            getgenv().OrbHuntSessionMinionKills = (getgenv().OrbHuntSessionMinionKills or 0) + 1
+            stats.OrbHuntMinionKills = (stats.OrbHuntMinionKills or 0) + 1
+        else
+            getgenv().OrbHuntSessionOrbKills = (getgenv().OrbHuntSessionOrbKills or 0) + 1
+            stats.OrbHuntOrbKills = (stats.OrbHuntOrbKills or 0) + 1
         end
-        if changed then getgenv()._SaveAllTimeStats() end
+        addOrbHuntReward(item, amount)
+        hlog(string.format("보상 알림: %s 처치 (%s) - %s %d개", isMinion and "미니언" or "오브",
+            tostring(target), tostring(item), amount))
+        pcall(getgenv()._SaveAllTimeStats)
+        return true
+    end
+
+    -- 기존 알림 프레임에서 새 알림이 생기면 호출됨 (글자가 늦게 채워질 수 있어서 잠깐 기다렸다가 확인)
+    getgenv()._CountHalloweenNotice = function(child)
+        if not child then return end
+        task.delay(0.2, function()
+            if not (child.Parent and Settings.Sols.masterMacroEnabled) then return end
+            pcall(function()
+                for _, desc in ipairs(child:GetDescendants()) do
+                    if desc:IsA("TextLabel") and handleAwardLabel(desc) then return end
+                end
+            end)
+        end)
+    end
+
+    -- 보상 알림이 다른 GUI에 뜨는 경우 대비: PlayerGui 전체에서 새로 생기는 TextLabel 확인
+    task.spawn(function()
+        local playerGui = LocalPlayer:WaitForChild("PlayerGui", 30)
+        if not playerGui then return end
+        -- 스크립트를 다시 실행했을 때 예전 연결이 남아 두 번 세는 것 방지
+        if getgenv()._OrbAwardConn then pcall(function() getgenv()._OrbAwardConn:Disconnect() end) end
+        getgenv()._OrbAwardConn = playerGui.DescendantAdded:Connect(function(d)
+            if not d:IsA("TextLabel") then return end
+            if not Settings.Sols.masterMacroEnabled then return end
+            task.delay(0.2, function()
+                if not d.Parent then return end
+                local tx = d.Text
+                if tx and tx:find("for defeating", 1, true) then
+                    pcall(handleAwardLabel, d)
+                end
+            end)
+        end)
+    end)
+
+    -- 사냥 시간 초과(오브를 못 잡음) -> 실패 1회
+    local function addOrbHuntFail()
+        getgenv().OrbHuntSessionFailCount = (getgenv().OrbHuntSessionFailCount or 0) + 1
+        local stats = getgenv()._AllTimeStats
+        stats.OrbHuntFailCount = (stats.OrbHuntFailCount or 0) + 1
+        pcall(getgenv()._SaveAllTimeStats)
     end
 
     -- ===== 사냥 본체 =====
@@ -8176,7 +8287,8 @@ do
         end
 
         if canKeepHunting() and tick() >= deadline then
-            hwarn("사냥 시간(" .. HCFG.HUNT_TIMEOUT .. "초) 초과 - 이번 오브 종료")
+            hwarn("사냥 시간(" .. HCFG.HUNT_TIMEOUT .. "초) 초과 - 이번 오브 종료 (실패로 집계)")
+            addOrbHuntFail()
         elseif not canKeepHunting() then
             local blocked = otherPlayerBlocking()
             if blocked and toggleOn() then
@@ -9002,8 +9114,9 @@ getgenv()._AllTimeStats = {
     SeaItemSuccessCount = 0,
     SeaItemRewards = {}, -- 아이템명 -> 누적 개수
     -- ✅ [사용자 요청] "2026 Halloween" - 오브 & 미니언 자동 사냥 성공/실패 횟수, 얻은 보상들
-    OrbHuntSuccessCount = 0,
-    OrbHuntFailCount = 0,
+    OrbHuntOrbKills = 0,    -- "Orb Awards" 알림 수
+    OrbHuntMinionKills = 0, -- "Orb Minion Awards" 알림 수
+    OrbHuntFailCount = 0,   -- 사냥 시간 초과로 못 잡은 횟수
     OrbHuntRewards = {}, -- 아이템명 -> 누적 개수
 }
 
@@ -10717,6 +10830,7 @@ MacroToggle = SolTab.Toggle({
         -- (먼저 지워버리면 종료 웹훅이 작동 시간을 계산할 수 없게 됨).
         if v then
             getgenv().MacroStartTime = tick()
+            getgenv()._OrbHuntEdenMissing = nil -- 매크로를 다시 켜면 Eden부터 다시 확인
         end
         updateBiomeMacroState()
         updateAutoBiomeUseState()
