@@ -7742,6 +7742,23 @@ do
         end
     end
 
+    -- ✅ [사용자 요청] 다른 이동 기능들처럼 오브 사냥도 앞(이동 전)/뒤(끝난 뒤)에 재설정을 한 번 한다.
+    -- 재설정 후 새 캐릭터가 생길 때까지 기다린다 (최대 15초).
+    local function resetAndWaitRespawn(label)
+        SetCurrentAction("오브 사냥 - " .. label)
+        local oldChar = LocalPlayer.Character
+        local didReset = ResetCharacter(true)
+        if not didReset then return getHRP() ~= nil end
+        local start = tick()
+        while (tick() - start) < 15 do
+            local char = LocalPlayer.Character
+            if char and char ~= oldChar and getHRP() then break end
+            task.wait(0.2)
+        end
+        task.wait(1) -- 렉 대비: 부활 직후 안정화
+        return getHRP() ~= nil
+    end
+
     -- ===== 이벤트 통계용 알림 집계 =====
     -- ✅ [사용자 요청] 오브/미니언을 잡으면 뜨는 알림(성공 여부 + 받은 보상)을 이벤트 통계에 반영.
     -- 사냥 중이거나 사냥이 끝난 직후(20초)에 뜬 알림만 본다. 알림 텍스트는 F9에도 그대로 찍는다.
@@ -7834,6 +7851,13 @@ do
         local orbKey = normalizeName(orb.Name)
         hlog("오브 감지: " .. orb.Name)
         getgenv()._OrbHuntNoticeWindowUntil = math.huge
+
+        -- 앞 재설정 (이동 전에 스폰 지점에서 깔끔하게 시작)
+        if not resetAndWaitRespawn("이동 전 재설정 중") then
+            hwarn("재설정 후 캐릭터가 안 생김 - 이번 오브는 잠시 뒤 다시 시도")
+            return
+        end
+        if not canProceed() then return end
 
         if not ensureEden() then
             hwarn(HCFG.AURA_NAME .. " 장착을 못 해서 이번 오브는 잠시 뒤 다시 시도")
@@ -8087,6 +8111,11 @@ do
         local _, hum = getHRP()
         setAutoRotate(hum, true)
         task.wait(0.3) -- 렉 대비: 정리가 반영된 뒤 자리 반납
+
+        -- 뒤 재설정 (끝난 뒤 스폰 지점으로 복귀). 토글/매크로를 껐거나 레어 바이옴 팝핑 중이면 생략.
+        if toggleOn() and not Settings.Emergency then
+            pcall(resetAndWaitRespawn, "끝난 뒤 재설정 중")
+        end
         getgenv()._OrbHuntNoticeWindowUntil = tick() + 20 -- 끝난 뒤에 늦게 뜨는 알림도 집계
 
         if isModelAlive(orb) then
