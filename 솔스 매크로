@@ -111,6 +111,7 @@ if getgenv then
     getgenv().PotionCraftWantsSlot = false
     getgenv().AutoItemUseWantsSlot = false
     getgenv().MerchantBuyWantsSlot = false
+    getgenv().OrbHuntWantsSlot = false
 end
 
 -- ✅ [사용자 요청] 스크립트를 켜면 즉시 로딩 바가 뜨고, 상태 UI가 준비되면 사라진다.
@@ -407,7 +408,10 @@ local Settings = {
         -- ✅ [사용자 요청] "2026 Summer Event" - 오토 미니게임(Minigame Ticket 2개 이상
         -- 이면 Lime으로 이동해 미니게임을 플레이) / 바다에 있는 아이템 자동 수집.
         autoMinigame = false,
-        autoSeaItemCollect = false
+        autoSeaItemCollect = false,
+        -- ✅ [사용자 요청] "2026 Halloween" - 오브 & 미니언 자동 사냥 / 사이드 기능(다른 플레이어 접속 시 중지)
+        autoOrbHunt = false,
+        orbHuntStopOnPlayer = false
     },
 }
 
@@ -474,7 +478,8 @@ local MacroPriority = {
         PotionCraft = false,
         MerchantBuy = false,
         AutoMinigame = false,
-        AutoSeaItemCollect = false
+        AutoSeaItemCollect = false,
+        OrbHunt = false
     }
 }
 
@@ -736,6 +741,7 @@ end
 local function IsAnySingleActionSignaled()
     return IsMemoryMatchSignaledFast() or IsPotionCraftSignaled() or getgenv().AutoItemUseWantsSlot == true
         or IsMerchantBuySignaled() or IsAutoMinigameSignaled() or IsAutoSeaItemCollectSignaled()
+        or (getgenv()._IsOrbHuntSignaled ~= nil and getgenv()._IsOrbHuntSignaled()) -- 2026 Halloween 오브 사냥
 end
 
 -- 낚시가 "단일성 행동" 신호에게 자리를 양보(대기)하는 통합 함수.
@@ -1140,6 +1146,9 @@ do
     local ACCENT_COLOR = getgenv()._ACCENT_COLOR
 
     local function richLine(labelText, valueText, color)
+        -- ✅ RichText에서 "&"가 그대로 들어가면 서식이 깨지므로 이스케이프 ("오브 & 미니언 자동 사냥" 등)
+        labelText = (tostring(labelText):gsub("&", "&amp;"))
+        valueText = (tostring(valueText):gsub("&", "&amp;"))
         return string.format('<font color="%s">%s</font> <font color="%s">%s</font>', getgenv()._LABEL_COLOR, labelText,
             color or getgenv()._VALUE_COLOR, valueText)
     end
@@ -1294,8 +1303,9 @@ do
     local webhookGroupLabel = createStatusLine(23, SMALL_TEXT_SIZE)
     local alwaysGroupLabel = createStatusLine(24, SMALL_TEXT_SIZE)
     local singleGroupLabel = createStatusLine(25, SMALL_TEXT_SIZE)
-    -- ✅ [사용자 요청] 오토 미니게임/바다 아이템 자동 수집은 다른 단일성 기능들과 섞지 않고
-    -- 별도의 "[이벤트]" 그룹으로 분류해서 표시한다.
+    -- ✅ [사용자 요청] 이벤트 기능은 다른 단일성 기능들과 섞지 않고 별도의 "[이벤트]" 그룹으로 표시
+    -- (2026 Halloween: 오브 & 미니언 자동 사냥)
+    local eventGroupLabel = createStatusLine(26, SMALL_TEXT_SIZE)
     local emergencyGroupLabel = createStatusLine(27, SMALL_TEXT_SIZE)
     local uptimeLabel = createStatusLine(28, SMALL_TEXT_SIZE)
 
@@ -1396,7 +1406,8 @@ do
         PotionCraft = "포션 제작",
         MerchantBuy = "상인 자동 구매",
         AutoMinigame = "오토 미니게임",
-        AutoSeaItemCollect = "바다 아이템 자동 수집"
+        AutoSeaItemCollect = "바다 아이템 자동 수집",
+        OrbHunt = "오브 & 미니언 자동 사냥"
     }
 
     -- ✅ [치명적 버그 수정] LABEL_COLOR와 동일한 근본 원인 - 이 파일에는 클로저
@@ -1416,7 +1427,7 @@ do
         autoPopHeaderLabel, glitchedTextInner, dreamspaceTextInner, cyberspacePopLabel,
         biomeLabel,
         enabledFeaturesHeaderLabel, webhookGroupLabel, alwaysGroupLabel, singleGroupLabel,
-        emergencyGroupLabel, uptimeLabel
+        eventGroupLabel, emergencyGroupLabel, uptimeLabel
     }
 
     -- ✅ [치명적 버그 수정] 구분선(Divider)들이 FadeStatusUI의 트윈 대상에서 빠져있어서,
@@ -1614,6 +1625,19 @@ do
                 singleGroupLabel.Text = (#singleNames > 0)
                     and richLine("[단일성 기능]", table.concat(singleNames, ", "))
                     or string.format('<font color="%s">[단일성 기능] 없음</font>', getgenv()._LABEL_COLOR)
+
+                -- > 이벤트 기능 (2026 Halloween)
+                if Settings.Sols.autoOrbHunt then
+                    local eventText = "오브 & 미니언 자동 사냥"
+                    local blockedBy = Settings.Sols.orbHuntStopOnPlayer and getgenv()._OrbHuntBlockedBy
+                        and getgenv()._OrbHuntBlockedBy()
+                    if blockedBy then
+                        eventText = eventText .. " (다른 플레이어 접속 중 - 일시 중지)"
+                    end
+                    eventGroupLabel.Text = richLine("[이벤트]", eventText)
+                else
+                    eventGroupLabel.Text = string.format('<font color="%s">[이벤트] 없음</font>', getgenv()._LABEL_COLOR)
+                end
 
                 -- > 긴급 기능 (하위 팝핑 대상 바이옴 목록은 위쪽 "자동 팝핑 바이옴" 섹션에서
                 -- 이미 별도로 표시하므로 여기서는 중복 표시하지 않음)
@@ -2657,54 +2681,43 @@ do
     EventAllTimeStatsPadding.PaddingBottom = UDim.new(0, 16)
     EventAllTimeStatsPadding.Parent = EventAllTimeStatsFrame
 
-    -- 맨 위 큰 타이틀 [ 2026 SUMMER ] (세션 화면에만 표시 - 올타임 화면은 "올타임"임을
-    -- 알 수 있도록 별도 타이틀)
+    -- ✅ [사용자 요청] "2026 Halloween" - 이벤트 통계 화면을 Summer -> Halloween으로 교체.
+    -- (Summer 통계 값은 올타임 저장 파일에 그대로 남아 있고, 화면에만 안 보임)
+    -- 맨 위 큰 타이틀 [ 2026 HALLOWEEN ] (세션/올타임 각각)
     local eventTitleLabel = createStatsLine(-20, 34, EventStatsFrame)
-    -- ✅ [사용자 요청] "상쾌한 바닷물 색 + 밝은 모래사장 색이 그라데이션으로 흐르게" -
-    -- <font color> 고정 색 태그 대신, TextLabel에 UIGradient를 직접 붙여서 텍스트
-    -- 색상 자체에 그라데이션을 입히고, Offset.X를 매 프레임 조금씩 이동시켜 좌우로
-    -- 계속 흐르는 것처럼 보이게 한다. RichText 태그가 있으면 UIGradient가 텍스트
-    -- 색상에 제대로 안 먹힐 수 있으므로, 이 라벨만 태그 없는 순수 텍스트로 둔다.
+    -- RichText 태그가 있으면 UIGradient가 텍스트 색상에 제대로 안 먹힐 수 있으므로 순수 텍스트로 둔다.
     eventTitleLabel.RichText = false
     eventTitleLabel.TextColor3 = Color3.new(1, 1, 1) -- 그라데이션이 실제 색을 결정하므로 흰색(순수 소스)
-    eventTitleLabel.Text = "[ 2026 SUMMER ]"
+    eventTitleLabel.Text = "[ 2026 HALLOWEEN ]"
 
-    local eventTitleGradient = Instance.new("UIGradient")
-    -- 상쾌한 바닷물 색(청록) <-> 밝은 모래사장 색(연한 베이지) 순환
-    eventTitleGradient.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 168, 204)),     -- 바닷물색
-        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 236, 179)), -- 모래사장색
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(0, 168, 204)),     -- 다시 바닷물색 (자연스러운 반복)
+    -- 호박 주황 <-> 보라 순환 (할로윈 색)
+    local HALLOWEEN_TITLE_COLORS = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 140, 26)),   -- 호박 주황
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(150, 70, 220)), -- 보라
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 140, 26)),   -- 다시 주황 (자연스러운 반복)
     })
+    local eventTitleGradient = Instance.new("UIGradient")
+    eventTitleGradient.Color = HALLOWEEN_TITLE_COLORS
     eventTitleGradient.Parent = eventTitleLabel
 
-    -- 올타임 화면에도 동일한 스타일의 타이틀
     local eventAllTimeTitleLabel = createStatsLine(-20, 34, EventAllTimeStatsFrame)
     eventAllTimeTitleLabel.RichText = false
     eventAllTimeTitleLabel.TextColor3 = Color3.new(1, 1, 1)
-    eventAllTimeTitleLabel.Text = "[ 2026 SUMMER - 올타임 ]"
+    eventAllTimeTitleLabel.Text = "[ 2026 HALLOWEEN - 올타임 ]"
 
     local eventAllTimeTitleGradient = Instance.new("UIGradient")
-    eventAllTimeTitleGradient.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 168, 204)),
-        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 236, 179)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(0, 168, 204)),
-    })
+    eventAllTimeTitleGradient.Color = HALLOWEEN_TITLE_COLORS
     eventAllTimeTitleGradient.Parent = eventAllTimeTitleLabel
 
     task.spawn(function()
         while true do
             Services.RunService.Heartbeat:Wait()
-            -- ✅ 세션/올타임 두 타이틀 모두 살아있는 동안 계속 흐르게 한다. 둘 다
-            -- 파괴되면(화면 자체가 사라지면) 이 코루틴도 함께 종료한다.
             if not eventTitleLabel.Parent and not eventAllTimeTitleLabel.Parent then break end
-            -- ✅ [최적화] 이벤트 통계 화면이 안 보일 때는(=사실상 항상) 매 프레임 갱신을 건너뛴다
+            -- ✅ [최적화] 이벤트 통계 화면이 안 보일 때는 매 프레임 갱신을 건너뛴다
             if not (EventStatsFrame.Visible or EventAllTimeStatsFrame.Visible) then
                 task.wait(0.5)
                 continue
             end
-            -- ✅ Offset.X가 -1~1 범위를 한 방향으로 계속 순환하며 흘러가게 한다
-            -- (파도가 밀려오듯 자연스럽게 이어지는 느낌).
             local t = (tick() * 0.5) % 2 -- 0~2 사이를 계속 순환
             local offset = Vector2.new(t - 1, 0)
             if eventTitleLabel.Parent then eventTitleGradient.Offset = offset end
@@ -2715,138 +2728,36 @@ do
     local dividerAfterEventTitle = createStatsDivider(-19, EventStatsFrame)
     local dividerAfterEventAllTimeTitle = createStatsDivider(-19, EventAllTimeStatsFrame)
 
-    -- 현재 보유 티켓 개수 (세션 화면에만 - 실시간 값이므로)
-    local eventTicketHeaderLabel = createStatsLine(-18, 22, EventStatsFrame)
-    eventTicketHeaderLabel.Text = string.format('<font color="%s">보유 중인 Minigame Ticket</font>', getgenv()._LABEL_COLOR)
-    local eventTicketValueLabel = createStatsLine(-17, 22, EventStatsFrame)
+    -- 세션/올타임 화면에 같은 구성의 줄들을 만드는 헬퍼
+    local function buildOrbHuntStatsLines(parentFrame)
+        local header = createStatsLine(-18, 24, parentFrame)
+        header.Text = string.format('<font color="%s">[ 오브 &amp; 미니언 자동 사냥 ]</font>', getgenv()._VALUE_COLOR)
 
-    local dividerAfterTicket = createStatsDivider(-16, EventStatsFrame)
+        local successHeader = createStatsLine(-17, 22, parentFrame)
+        successHeader.Text = string.format('<font color="%s">성공 횟수</font>', getgenv()._LABEL_COLOR)
+        local successValue = createStatsLine(-16, 22, parentFrame)
 
-    -- ✅ [사용자 요청] 오토 미니게임 세션 통계
-    local eventMinigameHeaderLabel = createStatsLine(-15, 24, EventStatsFrame)
-    eventMinigameHeaderLabel.Text = string.format('<font color="%s">[ 오토 미니게임 ]</font>', getgenv()._VALUE_COLOR)
+        local failHeader = createStatsLine(-15, 22, parentFrame)
+        failHeader.Text = string.format('<font color="%s">실패 횟수</font>', getgenv()._LABEL_COLOR)
+        local failValue = createStatsLine(-14, 22, parentFrame)
 
-    local eventSessionSuccessHeaderLabel = createStatsLine(-14, 22, EventStatsFrame)
-    eventSessionSuccessHeaderLabel.Text = string.format('<font color="%s">성공한 미니게임 횟수</font>', getgenv()._LABEL_COLOR)
-    local eventSessionSuccessValueLabel = createStatsLine(-13, 22, EventStatsFrame)
+        local rewardsHeader = createStatsLine(-13, 22, parentFrame)
+        rewardsHeader.Text = string.format('<font color="%s">얻은 보상들</font>', getgenv()._LABEL_COLOR)
+        local rewardsValue = createStatsLine(-12, 22, parentFrame)
+        rewardsValue.TextWrapped = true
 
-    local eventSessionRewardsHeaderLabel = createStatsLine(-12, 22, EventStatsFrame)
-    eventSessionRewardsHeaderLabel.Text = string.format('<font color="%s">얻은 보상들</font>', getgenv()._LABEL_COLOR)
-    local eventSessionRewardsValueLabel = createStatsLine(-11, 22, EventStatsFrame)
-    eventSessionRewardsValueLabel.TextWrapped = true
-
-    local dividerAfterMinigameSession = createStatsDivider(-10, EventStatsFrame)
-
-    -- ✅ [사용자 요청] 바다 아이템 자동 수집 세션 통계
-    local eventSeaItemHeaderLabel = createStatsLine(-9, 24, EventStatsFrame)
-    eventSeaItemHeaderLabel.Text = string.format('<font color="%s">[ 바다 아이템 자동 수집 ]</font>', getgenv()._VALUE_COLOR)
-
-    local eventSeaSessionSuccessHeaderLabel = createStatsLine(-8, 22, EventStatsFrame)
-    eventSeaSessionSuccessHeaderLabel.Text = string.format('<font color="%s">성공한 수집 횟수</font>', getgenv()._LABEL_COLOR)
-    local eventSeaSessionSuccessValueLabel = createStatsLine(-7, 22, EventStatsFrame)
-
-    local eventSeaSessionRewardsHeaderLabel = createStatsLine(-6, 22, EventStatsFrame)
-    eventSeaSessionRewardsHeaderLabel.Text = string.format('<font color="%s">얻은 보상들</font>', getgenv()._LABEL_COLOR)
-    local eventSeaSessionRewardsValueLabel = createStatsLine(-5, 22, EventStatsFrame)
-    eventSeaSessionRewardsValueLabel.TextWrapped = true
-
-    -- ===== 올타임 화면 내용 =====
-    local eventAllTimeMinigameHeaderLabel = createStatsLine(-18, 24, EventAllTimeStatsFrame)
-    eventAllTimeMinigameHeaderLabel.Text = string.format('<font color="%s">[ 오토 미니게임 ]</font>', getgenv()._VALUE_COLOR)
-
-    local eventAllTimeSuccessHeaderLabel = createStatsLine(-17, 22, EventAllTimeStatsFrame)
-    eventAllTimeSuccessHeaderLabel.Text = string.format('<font color="%s">성공한 미니게임 횟수</font>', getgenv()._LABEL_COLOR)
-    local eventAllTimeSuccessValueLabel = createStatsLine(-16, 22, EventAllTimeStatsFrame)
-
-    local eventAllTimeRewardsHeaderLabel = createStatsLine(-15, 22, EventAllTimeStatsFrame)
-    eventAllTimeRewardsHeaderLabel.Text = string.format('<font color="%s">얻은 보상들</font>', getgenv()._LABEL_COLOR)
-    local eventAllTimeRewardsValueLabel = createStatsLine(-14, 22, EventAllTimeStatsFrame)
-    eventAllTimeRewardsValueLabel.TextWrapped = true
-
-    local dividerAfterMinigameAllTime = createStatsDivider(-13, EventAllTimeStatsFrame)
-
-    local eventAllTimeSeaItemHeaderLabel = createStatsLine(-12, 24, EventAllTimeStatsFrame)
-    eventAllTimeSeaItemHeaderLabel.Text = string.format('<font color="%s">[ 바다 아이템 자동 수집 ]</font>',
-        getgenv()._VALUE_COLOR)
-
-    local eventAllTimeSeaSuccessHeaderLabel = createStatsLine(-11, 22, EventAllTimeStatsFrame)
-    eventAllTimeSeaSuccessHeaderLabel.Text = string.format('<font color="%s">성공한 수집 횟수</font>', getgenv()._LABEL_COLOR)
-    local eventAllTimeSeaSuccessValueLabel = createStatsLine(-10, 22, EventAllTimeStatsFrame)
-
-    local eventAllTimeSeaRewardsHeaderLabel = createStatsLine(-9, 22, EventAllTimeStatsFrame)
-    eventAllTimeSeaRewardsHeaderLabel.Text = string.format('<font color="%s">얻은 보상들</font>', getgenv()._LABEL_COLOR)
-    local eventAllTimeSeaRewardsValueLabel = createStatsLine(-8, 22, EventAllTimeStatsFrame)
-    eventAllTimeSeaRewardsValueLabel.TextWrapped = true
+        return { success = successValue, fail = failValue, rewards = rewardsValue }
+    end
+    local orbHuntSessionLines = buildOrbHuntStatsLines(EventStatsFrame)
+    local orbHuntAllTimeLines = buildOrbHuntStatsLines(EventAllTimeStatsFrame)
 
     getgenv()._EventStatsFrameRef = EventStatsFrame
     getgenv()._EventAllTimeStatsFrameRef = EventAllTimeStatsFrame
 
-    -- ✅ 아이템명 -> 개수 테이블을 "A : 3개" 형식의 정렬된 줄 목록 텍스트로 변환하는 헬퍼.
-    -- ✅ [사용자 요청] 보상 목록 정렬 순서 - 오토 미니게임. 목록에 없는 아이템은
-    -- 이 순서 뒤에 이름 기준 알파벳 순으로 붙는다.
-    local MINIGAME_REWARD_ORDER = {
-        "Boost Module : V1",
-        "Boost Module : V2",
-        "Normal Summer Random Box",
-        "Rare Summer Random Box",
-        "Mega Summer Random Box",
-    }
-    -- ✅ 아이템별 텍스트 색상 - 실제 게임 내 아이템 아이콘/텍스트 색상을 그대로 반영
-    -- (이미지 참고). 이미지가 제공되지 않은 아이템은 기본값(흰색)을 사용한다.
-    local MINIGAME_REWARD_COLORS = {
-        ["Boost Module : V1"] = "#C8DCE8",
-        ["Boost Module : V2"] = "#AEC6EF",
-        -- ✅ [사용자 요청] 이미지 확인 결과 흰색이 아니라 노란색/골드 계열이었음
-        ["Normal Summer Random Box"] = "#FFE87C",
-        ["Rare Summer Random Box"] = "#7EC8E3",
-        ["Mega Summer Random Box"] = "#FF66FF",
-    }
-
-    -- ✅ [사용자 요청] 보상 목록 정렬 순서 - 바다 아이템 자동 수집. "Divier Potion"은
-    -- 실제 게임 내 정확한 표기인 "Diver Potion"으로 오타를 수정했다(이미지 참고).
-    -- ✅ [사용자 요청] "Hwochoe"로 잘못 수정했던 걸 "Hwachae"로 원복 - 실제 알림에서
-    -- 파싱되는 값과 정확히 일치해야 순서/색상이 적용된다. "Random Rune Chest"를
-    -- Hwachae 다음, Potion Chest 앞에 추가.
-    local SEA_ITEM_REWARD_ORDER = {
-        "Lucky Potion L",
-        "Speed Potion L",
-        "Rage Potion",
-        "Jewelry Potion",
-        "Diver Potion",
-        "Zombie Potion",
-        "Hwachae",
-        "Random Rune Chest",
-        "Potion Chest",
-        "Rare Potion Chest",
-        "Mega Potion Chest",
-        "Normal Summer Potion Chest",
-        "Rare Summer Potion Chest",
-        "Mega Summer Potion Chest",
-        -- ✅ [사용자 요청] "Normal/Rare/Mega Summer Random Box 바다 아이템 목록에서도
-        -- 나오는게 정상" - 미니게임 보상과 동일한 이름/색상을 그대로 재사용해서 목록
-        -- 끝에 추가.
-        "Normal Summer Random Box",
-        "Rare Summer Random Box",
-        "Mega Summer Random Box",
-    }
-    local SEA_ITEM_REWARD_COLORS = {
-        ["Lucky Potion L"] = "#90EE90",
-        ["Speed Potion L"] = "#87CEFA",
-        ["Rage Potion"] = "#FF4040",
-        ["Jewelry Potion"] = "#5DC8E0",
-        ["Diver Potion"] = "#5DADE2",
-        ["Zombie Potion"] = "#33CC33",
-        ["Hwachae"] = "#33CC33",
-        ["Potion Chest"] = "#FFFFFF",
-        ["Rare Potion Chest"] = "#7EC8E3",
-        ["Mega Potion Chest"] = "#FFD700",
-        ["Normal Summer Potion Chest"] = "#FFE87C",
-        ["Rare Summer Potion Chest"] = "#7EC8E3",
-        ["Mega Summer Potion Chest"] = "#FF66FF",
-        ["Normal Summer Random Box"] = "#FFE87C",
-        ["Rare Summer Random Box"] = "#7EC8E3",
-        ["Mega Summer Random Box"] = "#FF66FF",
-    }
+    -- ✅ 보상 목록 정렬 순서/색상 - 할로윈 보상 이름을 알게 되면 여기에 추가하면 된다.
+    -- 목록에 없는 아이템은 이름 기준 알파벳 순, 색상이 없는 아이템은 흰색으로 표시된다.
+    local HALLOWEEN_REWARD_ORDER = {}
+    local HALLOWEEN_REWARD_COLORS = {}
 
     -- ✅ [사용자 요청] 지정된 순서(orderList)대로 정렬하고, 목록에 없는 아이템은 그
     -- 뒤에 이름 기준 알파벳 순으로 붙인다. 각 아이템은 colorTable에 지정된 색상으로
@@ -2877,8 +2788,7 @@ do
         local rewardLines = {}
         for _, reward in ipairs(rewardParts) do
             local color = (colorTable and colorTable[reward.name]) or "#FFFFFF"
-            -- ✅ [사용자 요청] "갯수 텍스트는 색이 없게" - 아이템 이름 부분만
-            -- <font color>로 감싸고, " : N개" 부분은 색 태그 없이 기본색으로 둔다.
+            -- ✅ [사용자 요청] "갯수 텍스트는 색이 없게" - 아이템 이름 부분만 색을 입힌다.
             table.insert(rewardLines, string.format('<font color="%s">%s</font> : %d개', color, reward.name, reward.count))
         end
         return (#rewardLines > 0)
@@ -2886,34 +2796,22 @@ do
             or string.format('<font color="%s">없음</font>', getgenv()._LABEL_COLOR)
     end
 
-    -- ✅ [사용자 요청] "지금 있는 티켓의 갯수"는 인벤토리를 직접 확인. 세션 통계는
-    -- getgenv()의 세션 전용 카운터에서 읽어온다.
+    -- 세션 통계는 getgenv()의 세션 전용 카운터에서 읽어온다.
     getgenv()._UpdateEventStatsUI = function()
-        local amount = 0
-        local ok, result = pcall(GetInventoryItemAmountWithoutOpening, "Minigame Ticket")
-        if ok and result then amount = result end
-        eventTicketValueLabel.Text = string.format("%s", amount)
-
-        eventSessionSuccessValueLabel.Text = string.format("%s", getgenv().MinigameSessionSuccessCount or 0)
-        eventSessionRewardsValueLabel.Text = FormatRewardLines(getgenv().MinigameSessionRewards, MINIGAME_REWARD_ORDER,
-            MINIGAME_REWARD_COLORS)
-
-        eventSeaSessionSuccessValueLabel.Text = string.format("%s", getgenv().SeaItemSessionSuccessCount or 0)
-        eventSeaSessionRewardsValueLabel.Text = FormatRewardLines(getgenv().SeaItemSessionRewards, SEA_ITEM_REWARD_ORDER,
-            SEA_ITEM_REWARD_COLORS)
+        orbHuntSessionLines.success.Text = string.format("%s", getgenv().OrbHuntSessionSuccessCount or 0)
+        orbHuntSessionLines.fail.Text = string.format("%s", getgenv().OrbHuntSessionFailCount or 0)
+        orbHuntSessionLines.rewards.Text = FormatRewardLines(getgenv().OrbHuntSessionRewards,
+            HALLOWEEN_REWARD_ORDER, HALLOWEEN_REWARD_COLORS)
     end
 
     -- ✅ [사용자 요청] "올타임은 다른 탭으로" - 올타임(누적) 통계는 별도 화면에서
     -- _AllTimeStats(디스크 저장, 영구 누적)를 읽어온다.
     getgenv()._UpdateEventAllTimeStatsUI = function()
         local stats = getgenv()._AllTimeStats
-        eventAllTimeSuccessValueLabel.Text = string.format("%s", stats.MinigameSuccessCount or 0)
-        eventAllTimeRewardsValueLabel.Text = FormatRewardLines(stats.MinigameRewards, MINIGAME_REWARD_ORDER,
-            MINIGAME_REWARD_COLORS)
-
-        eventAllTimeSeaSuccessValueLabel.Text = string.format("%s", stats.SeaItemSuccessCount or 0)
-        eventAllTimeSeaRewardsValueLabel.Text = FormatRewardLines(stats.SeaItemRewards, SEA_ITEM_REWARD_ORDER,
-            SEA_ITEM_REWARD_COLORS)
+        orbHuntAllTimeLines.success.Text = string.format("%s", stats.OrbHuntSuccessCount or 0)
+        orbHuntAllTimeLines.fail.Text = string.format("%s", stats.OrbHuntFailCount or 0)
+        orbHuntAllTimeLines.rewards.Text = FormatRewardLines(stats.OrbHuntRewards,
+            HALLOWEEN_REWARD_ORDER, HALLOWEEN_REWARD_COLORS)
     end
 
     -- ✅ [사용자 요청] "AAA 통계(All time All Account)" - 모든 계정의 올타임 통계를
@@ -3562,7 +3460,7 @@ do
 
         s.SwitchButton.Visible = macroOn
         -- ✅ [사용자 요청] Summer 이벤트 종료 - "이벤트 통계" 버튼은 항상 숨김
-        s.EventStatsSwitchButton.Visible = false
+        s.EventStatsSwitchButton.Visible = macroOn -- 2026 Halloween 이벤트 진행 중
         s.EventStatsBackButton.Visible = macroOn
         s.EventAllTimeOpenButton.Visible = macroOn
         s.EventAllTimeBackButton.Visible = macroOn
@@ -4154,6 +4052,9 @@ task.spawn(function()
                         pcall(CountAutoCraftedOnce, child)
                         pcall(CountMinigameRewardOnce, child)
                         pcall(CountSeaItemRewardOnce, child)
+                        if getgenv()._CountHalloweenNotice then
+                            pcall(getgenv()._CountHalloweenNotice, child)
+                        end
                     end)
 
                     -- ✅ [버그 수정] ChildAdded는 "새로 생기는 것"만 잡아서, 매크로를 켜기 전에
@@ -4673,12 +4574,26 @@ local function EnsureClickToMoveMode(shouldContinueFn)
         return true
     end
 
-    -- 메뉴 열기 (ESC -> Tab) - 실제로 닫혀있을 때만 ESC를 눌러 연다. 이미 열려있는데
+    -- 메뉴 열기 - 실제로 닫혀있을 때만 ESC를 눌러 연다. 이미 열려있는데
     -- 또 누르면 오히려 닫아버려서 이후 모든 입력이 어긋나게 된다.
     if not isMenuOpenNow() then
         vim:SendKeyEvent(true, Enum.KeyCode.Escape, false, game)
         task.wait(1.5)
         vim:SendKeyEvent(false, Enum.KeyCode.Escape, false, game)
+    end
+
+    -- ✅ [사용자 요청] ESC 다음 바로 Tab이 아니라: 아래 키 3번 -> 엔터 1번 -> Tab 1번 순서로 누른다.
+    for _ = 1, 3 do
+        if not shouldContinueFn() then break end
+        vim:SendKeyEvent(true, Enum.KeyCode.Down, false, game)
+        task.wait(0.35)
+        vim:SendKeyEvent(false, Enum.KeyCode.Down, false, game)
+    end
+    if shouldContinueFn() then
+        vim:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
+        task.wait(0.35)
+        vim:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
+        task.wait(0.5)
     end
 
     vim:SendKeyEvent(true, Enum.KeyCode.Tab, false, game)
@@ -4699,6 +4614,20 @@ local function EnsureClickToMoveMode(shouldContinueFn)
             .PageViewClipper.PageView.PageViewInnerFrame.Page
         selector = basePage["Movement ModeFrame"].Selector
     end)
+
+    -- ✅ [사용자 요청] Tab을 누른 뒤 다시 한 번 확인: 이미 Click To Move면 바로 ESC로 창을 닫고 끝낸다.
+    if selector then
+        local s3Now = nil
+        pcall(function() s3Now = selector.Selection3 end)
+        if s3Now and s3Now.Position == UDim2.new(0, 32, 0, 0) then
+            if isMenuOpenNow() then
+                vim:SendKeyEvent(true, Enum.KeyCode.Escape, false, game)
+                task.wait(1.5)
+                vim:SendKeyEvent(false, Enum.KeyCode.Escape, false, game)
+            end
+            return true
+        end
+    end
 
     local hoverSuccess = false
     if selector then
@@ -7053,6 +6982,1076 @@ RegisterSingleAction({
     run = RunAutoSeaItemCollect
 })
 
+-- =============================
+-- [ 2026 Halloween - 오브 & 미니언 자동 사냥 ]
+-- =============================
+-- ✅ [사용자 요청] 단독 스크립트(오브 & 미니언 자동 사냥)를 매크로의 단일성 이벤트 기능으로 옮김.
+--   1. Workspace 바로 아래에 HumanoidRootPart가 있는 오브(WINDY, SNOWY, RAINY, SANDSTORM, HELL,
+--      STARFALL, HEAVEN, LOST FOREST, CORRUPTION, NULL - 대소문자/띄어쓰기 무시)가 있으면 신호
+--   2. Eden 아우라 장착 (Aura Storage -> Special 탭 -> Eden -> Equip)
+--   3. Click to Move로 오브까지 이동, 도착 확인
+--   4. Workspace.NPCs 안에서 오브와 이름이 같은 미니언을 한 마리씩 집중 공격
+--      (직접 걸어서 뺑뺑이 돌며 T, F, E, Q / 다른 미니언도 같이 맞는 방향으로 조준)
+--   5. 미니언을 다 잡으면 오브 공격 (T, F, E, Q, V + 콤보 V면 저격총 R)
+--   6. 오브와 미니언이 다 사라지면 끝
+--   * 죽으면 스킬을 멈추고 부활 후 Click to Move로 복귀, Eden이 풀리면 다시 장착
+--   * 사이드 기능 "다른 플레이어 접속 시 중지": 예외 목록에 없는 플레이어가 서버에 있으면
+--     이 기능만 즉시 멈추고 자리를 넘김 (그 플레이어가 나가면 다시 동작)
+--   * 레어 바이옴 자동 팝핑(Emergency)이 오면 잠깐 멈췄다가, 끝나면 복귀해서 이어감
+local RunOrbHunt
+do
+    local HCFG = {
+        AURA_NAME = "Eden",
+        ORB_NAMES = { "WINDY", "SNOWY", "RAINY", "SANDSTORM", "HELL", "STARFALL", "HEAVEN", "LOST FOREST", "CORRUPTION", "NULL" },
+        -- 미니언 잡을 때 / 오브 부술 때 누를 스킬 (V는 오브 부술 때만)
+        SKILL_KEYS = { Enum.KeyCode.T, Enum.KeyCode.F, Enum.KeyCode.E, Enum.KeyCode.Q },
+        ORB_SKILL_KEYS = { Enum.KeyCode.T, Enum.KeyCode.F, Enum.KeyCode.E, Enum.KeyCode.Q, Enum.KeyCode.V },
+        ULT_KEY = Enum.KeyCode.R,      -- Combo가 "V"일 때 쓰는 저격총 (오브 부술 때만)
+        ULT_LOCK_TIME = 0.8,           -- R을 쏜 뒤 다른 스킬을 쉬는 시간
+        SKILL_GAP = 0.12,              -- 스킬 키 사이 간격(초)
+
+        ARRIVE_DIST = 14,              -- 오브(또는 복귀 지점) 도착으로 인정하는 수평 거리
+        RECLICK_MOVED_DIST = 8,        -- 클릭한 뒤 목표가 이만큼 움직였을 때만 다시 클릭
+        RECLICK_IDLE_TIME = 1.5,       -- 클릭했는데 이 시간 동안 안 움직이면 다시 클릭
+
+        ENGAGE_DIST = 35,              -- 이 거리 안이면 스킬 + 뺑뺑이, 밖이면 걸어서 접근만
+        ORBIT_RADIUS = 14,             -- 뺑뺑이 돌 때 유지할 거리
+        ORBIT_LEAD_DEG = 40,           -- 원을 따라 얼마나 앞쪽 지점으로 걸어갈지
+        ORBIT_FLIP_MIN = 3,            -- 도는 방향을 바꾸는 간격(초, 최소~최대 랜덤)
+        ORBIT_FLIP_MAX = 6,
+        MINION_AVOID_DIST = 9,         -- 다른 미니언과 이 거리보다 가까워지면 피해서 이동
+        AIM_RANGE = 45,                -- 같이 맞출 미니언을 고려하는 거리
+        AIM_CONE_DEG = 25,             -- 스킬이 맞는다고 보는 부채꼴 반각(도)
+        TURN_SPEED_DEG = 900,          -- 몸을 돌리는 속도(도/초)
+        FACE_TOLERANCE_DEG = 20,       -- 조준 방향과 이 각도 안으로 맞춰졌을 때만 스킬 사용
+        CAM_HEIGHT = 60,               -- Click to Move 때 카메라를 목표 위 얼마 높이에서 내려다볼지
+
+        HUNT_TIMEOUT = 300,            -- 오브 하나에 최대 몇 초까지 쓸지
+        FAILED_ORB_SKIP = 10,          -- 실패한 오브는 이 시간(초) 동안 신호에서 제외
+    }
+
+    -- ✅ [사용자 요청] "다른 플레이어 접속 시 중지"의 예외 플레이어 (유저네임, 대소문자 무시)
+    local ORB_HUNT_EXCEPTION_PLAYERS = {
+        "RG_Acurx", "RN_Gelidness", "ROBERXDVG", "IEsenciaI", "BJ_RP", "9gn0va", "Haster5910",
+    }
+    local exceptionSet = {}
+    for _, n in ipairs(ORB_HUNT_EXCEPTION_PLAYERS) do
+        exceptionSet[string.lower(n)] = true
+    end
+
+    local VIM = Services.VirtualInputManager
+    local RunService = Services.RunService
+    local Players = game:GetService("Players")
+
+    local function hlog(msg) print("[오브 사냥] " .. msg) end
+    local function hwarn(msg) warn("[오브 사냥] " .. msg) end
+
+    local function normalizeName(s)
+        return (string.upper(s or ""):gsub("[%s_]", ""))
+    end
+    local ORB_KEYS = {}
+    for _, n in ipairs(HCFG.ORB_NAMES) do
+        ORB_KEYS[normalizeName(n)] = true
+    end
+
+    -- ===== 다른 플레이어 감지 =====
+    -- 반환: 막혀야 하면 그 플레이어 이름, 아니면 nil
+    local function otherPlayerBlocking()
+        if not Settings.Sols.orbHuntStopOnPlayer then return nil end
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer and not exceptionSet[string.lower(p.Name)] then
+                return p.Name
+            end
+        end
+        return nil
+    end
+    getgenv()._OrbHuntBlockedBy = otherPlayerBlocking
+
+    local lastBlockedName = nil
+    task.spawn(function()
+        while true do
+            task.wait(1)
+            local ok, blocked = pcall(otherPlayerBlocking)
+            blocked = ok and blocked or nil
+            if Settings.Sols.autoOrbHunt and blocked ~= lastBlockedName then
+                if blocked then
+                    hlog("다른 플레이어(" .. blocked .. ") 접속 - 오브 사냥 일시 중지")
+                elseif lastBlockedName then
+                    hlog("다른 플레이어가 모두 나감 - 오브 사냥 다시 동작")
+                end
+            end
+            lastBlockedName = blocked
+        end
+    end)
+
+    local function toggleOn()
+        return Settings.Sols.autoOrbHunt and Settings.Sols.masterMacroEnabled
+    end
+    -- 사냥을 계속해도 되는가 (Emergency는 따로 처리: 멈췄다가 다시 이어감)
+    local function canKeepHunting()
+        return toggleOn() and otherPlayerBlocking() == nil
+    end
+    -- 이동/장착처럼 끊어도 되는 단계에서 쓰는 조건 (Emergency면 즉시 중단)
+    local function canProceed()
+        return canKeepHunting() and not Settings.Emergency
+    end
+
+    -- ===== 공용 헬퍼 =====
+    local function isAliveInst(inst)
+        return inst ~= nil and inst.Parent ~= nil and inst:IsDescendantOf(game)
+    end
+
+    local function getHRP()
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hrp and hum and hum.Health > 0 then return hrp, hum end
+        return nil, nil
+    end
+
+    local function flat(v) return Vector3.new(v.X, 0, v.Z) end
+
+    local function tapKey(key, hold)
+        VIM:SendKeyEvent(true, key, false, game)
+        task.wait(hold or 0.03)
+        VIM:SendKeyEvent(false, key, false, game)
+    end
+
+    local function rightClickCenter()
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        local x = math.floor(cam.ViewportSize.X / 2)
+        local y = math.floor(cam.ViewportSize.Y / 2)
+        showPremiumIndicator(x, y)
+        VIM:SendMouseMoveEvent(x, y, game)
+        VIM:SendMouseButtonEvent(x, y, 1, true, game, 0)
+        task.wait(0.05)
+        VIM:SendMouseButtonEvent(x, y, 1, false, game, 0)
+    end
+
+    local function releaseInputs()
+        for _, key in ipairs(HCFG.ORB_SKILL_KEYS) do
+            pcall(function() VIM:SendKeyEvent(false, key, false, game) end)
+        end
+        pcall(function() VIM:SendKeyEvent(false, HCFG.ULT_KEY, false, game) end)
+        pcall(function()
+            local cam = workspace.CurrentCamera
+            local x = cam and math.floor(cam.ViewportSize.X / 2) or 0
+            local y = cam and math.floor(cam.ViewportSize.Y / 2) or 0
+            VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
+            VIM:SendMouseButtonEvent(x, y, 1, false, game, 0)
+        end)
+    end
+
+    -- ===== 카메라 (Click to Move 이동 때만: 목표 바로 위에서 내려다봄) =====
+    local camFocus = nil
+    local camBound = false
+    local CAM_BIND = "OrbHuntCamera"
+
+    local function startCamera()
+        if camBound then return end
+        camBound = true
+        RunService:BindToRenderStep(CAM_BIND, Enum.RenderPriority.Camera.Value + 1, function()
+            local cam = workspace.CurrentCamera
+            if cam and camFocus then
+                cam.CameraType = Enum.CameraType.Scriptable
+                cam.CFrame = CFrame.new(camFocus + Vector3.new(0, HCFG.CAM_HEIGHT, 0)) * CFrame.Angles(math.rad(-90), 0, 0)
+            end
+        end)
+    end
+
+    local function stopCamera()
+        camFocus = nil
+        if camBound then
+            camBound = false
+            pcall(function() RunService:UnbindFromRenderStep(CAM_BIND) end)
+            local cam = workspace.CurrentCamera
+            if cam then cam.CameraType = Enum.CameraType.Custom end
+        end
+    end
+
+    -- ===== Eden 장착 =====
+    local function findSpecialTab(auraStorage)
+        local tabFrame = FindChildByPosition(auraStorage, "Frame", 0.995000005, 0.0900000036)
+        if not tabFrame then return nil end
+        local btn = FindChildByPosition(tabFrame, "ImageButton", 1, 0)
+        if btn then return btn end
+        for _, desc in ipairs(tabFrame:GetDescendants()) do
+            if desc:IsA("ImageButton")
+                and math.abs(desc.Position.X.Scale - 1) < 0.0001
+                and math.abs(desc.Position.Y.Scale) < 0.0001 then
+                return desc
+            end
+        end
+        return nil
+    end
+
+    local function findAuraButton(auraStorage, auraName)
+        local lists = {}
+        for _, d in ipairs(auraStorage:GetDescendants()) do
+            if d:IsA("ScrollingFrame") then table.insert(lists, d) end
+        end
+        table.sort(lists, function(a, b) return (a.Visible and 1 or 0) > (b.Visible and 1 or 0) end)
+        for _, sf in ipairs(lists) do
+            for _, desc in ipairs(sf:GetDescendants()) do
+                if desc.Name == auraName
+                    or ((desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text == auraName) then
+                    local node = desc
+                    while node and node ~= sf do
+                        if node:IsA("GuiButton") then return node, sf end
+                        node = node.Parent
+                    end
+                end
+            end
+        end
+        return nil, nil
+    end
+
+    local function findEquipButton(auraStorage)
+        local outer = FindChildByPosition(auraStorage, "Frame", 0.00499999989, 0.0900000036)
+        local mid = outer and FindChildByPosition(outer, "Frame", 0, 0.600000024)
+        local inner = mid and mid:FindFirstChildWhichIsA("Frame")
+        return inner and FindChildByPosition(inner, "ImageButton", 0.5, 0.125)
+    end
+
+    local function buttonText(btn)
+        local label = btn and btn:FindFirstChildWhichIsA("TextLabel", true)
+        return label and label.Text or ""
+    end
+
+    local edenEquipButton = nil -- 장착 확인 버튼 참조 (해제 감시용)
+    local needReequip = false
+
+    local function equipEden()
+        local auraName = HCFG.AURA_NAME
+        local mainInterface = LocalPlayer.PlayerGui:FindFirstChild("MainInterface")
+        local auraStorage = mainInterface and FindFrameByDescendantLabelText(mainInterface, "Aura Storage")
+        if not auraStorage then return false, "Aura Storage 창을 찾지 못함" end
+
+        local wasOpen = auraStorage.Visible
+        local ok, success, msg = pcall(function()
+            auraStorage.Visible = true
+            task.wait(0.5)
+
+            local special = findSpecialTab(auraStorage)
+            if not special then return false, "Special 탭 버튼을 찾지 못함" end
+            clickExactly(special)
+            task.wait(0.5)
+
+            local auraBtn, list
+            local start, reclicked = tick(), false
+            while tick() - start < 4 do
+                auraBtn, list = findAuraButton(auraStorage, auraName)
+                if auraBtn then break end
+                if not reclicked and tick() - start > 2 then
+                    reclicked = true
+                    clickExactly(special)
+                end
+                task.wait(0.25)
+            end
+            if not auraBtn then return false, "Special 탭에서 " .. auraName .. " 을(를) 찾지 못함" end
+
+            list.CanvasPosition = Vector2.new(0, math.max(0,
+                auraBtn.AbsolutePosition.Y - list.AbsolutePosition.Y + list.CanvasPosition.Y))
+            task.wait(0.25)
+            clickExactly(auraBtn)
+            task.wait(0.5)
+
+            local equip = findEquipButton(auraStorage)
+            if not equip then return false, "장착(Equip) 버튼을 찾지 못함" end
+            edenEquipButton = equip
+            if buttonText(equip) == "Unequip" then return true, "이미 장착돼 있음" end
+
+            for _ = 1, 3 do
+                clickExactly(equip)
+                local s = tick()
+                while tick() - s < 1.5 do
+                    task.wait(0.25)
+                    if isAliveInst(equip) and buttonText(equip) == "Unequip" then
+                        return true, "장착 완료"
+                    end
+                end
+            end
+            return false, "Equip을 눌러도 장착 상태로 바뀌지 않음"
+        end)
+
+        if isAliveInst(auraStorage) and not wasOpen then
+            auraStorage.Visible = false
+        end
+        if not ok then return false, "오류: " .. tostring(success) end
+        if success then needReequip = false end
+        return success, msg
+    end
+
+    local function ensureEden()
+        SetCurrentAction("오브 사냥 - " .. HCFG.AURA_NAME .. " 장착 확인 중")
+        for attempt = 1, 3 do
+            if not canProceed() then return false end
+            local ok, msg = equipEden()
+            if ok then
+                hlog(HCFG.AURA_NAME .. ": " .. tostring(msg))
+                return true
+            end
+            hwarn(HCFG.AURA_NAME .. " 장착 실패 (" .. attempt .. "/3) - " .. tostring(msg))
+            task.wait(1)
+        end
+        return false
+    end
+
+    -- ===== 오브 / 미니언 찾기 =====
+    local function modelHRP(model)
+        return model and model:FindFirstChild("HumanoidRootPart")
+    end
+
+    local function isModelAlive(model)
+        if not (model and isAliveInst(model)) then return false end
+        if not modelHRP(model) then return false end
+        local hum = model:FindFirstChildOfClass("Humanoid")
+        if hum and hum.Health <= 0 then return false end
+        return true
+    end
+
+    local orbSkipUntil = setmetatable({}, { __mode = "k" }) -- 실패한 오브는 잠깐 제외
+
+    local function findOrb()
+        local myHrp = getHRP()
+        local best, bestDist = nil, math.huge
+        for _, child in ipairs(workspace:GetChildren()) do
+            if child:IsA("Model") and ORB_KEYS[normalizeName(child.Name)]
+                and modelHRP(child) and not Players:GetPlayerFromCharacter(child)
+                and not (orbSkipUntil[child] and tick() < orbSkipUntil[child]) then
+                local d = myHrp and (modelHRP(child).Position - myHrp.Position).Magnitude or 0
+                if d < bestDist then
+                    best, bestDist = child, d
+                end
+            end
+        end
+        return best
+    end
+
+    local function getMinions(orbKey)
+        local list = {}
+        local npcs = workspace:FindFirstChild("NPCs")
+        if not npcs then return list end
+        for _, m in ipairs(npcs:GetChildren()) do
+            if m:IsA("Model") and normalizeName(m.Name) == orbKey and isModelAlive(m) then
+                table.insert(list, m)
+            end
+        end
+        return list
+    end
+
+    local function nearestModel(list, fromPos)
+        local best, bestDist = nil, math.huge
+        for _, m in ipairs(list) do
+            local d = (modelHRP(m).Position - fromPos).Magnitude
+            if d < bestDist then best, bestDist = m, d end
+        end
+        return best, bestDist
+    end
+
+    -- ===== 조준 (같이 맞출 미니언 고르기 + 물리 회전으로 부드럽게 돌기) =====
+    local aim = { active = false, focus = nil, partner = nil, mode = "focus", lastEval = 0 }
+
+    local function aimDirFor(myPos, focus, partner, mode)
+        local fh = modelHRP(focus)
+        if not fh then return nil end
+        local toFocus = flat(fh.Position - myPos)
+        if toFocus.Magnitude < 0.5 then return nil end
+        local fdir = toFocus.Unit
+        if mode ~= "focus" and partner and isModelAlive(partner) then
+            local pv = flat(modelHRP(partner).Position - myPos)
+            if pv.Magnitude > 0.5 then
+                local u = pv.Unit
+                local dir = (mode == "partner") and u or (u + fdir)
+                if dir.Magnitude > 0.01 then
+                    dir = dir.Unit
+                    if dir:Dot(fdir) >= math.cos(math.rad(HCFG.AIM_CONE_DEG)) then
+                        return dir
+                    end
+                end
+            end
+        end
+        return fdir
+    end
+
+    local function aimScore(dir, myPos, targets)
+        local cosLimit = math.cos(math.rad(HCFG.AIM_CONE_DEG))
+        local n = 0
+        for _, m in ipairs(targets) do
+            local v = flat(modelHRP(m).Position - myPos)
+            if v.Magnitude <= HCFG.AIM_RANGE and v.Magnitude > 0.5 and dir:Dot(v.Unit) >= cosLimit then
+                n = n + 1
+            end
+        end
+        return n
+    end
+
+    local function updateAimChoice(myPos, focus, targets)
+        aim.active = true
+        if aim.focus ~= focus then
+            aim.focus, aim.partner, aim.mode, aim.lastEval = focus, nil, "focus", 0
+        end
+        if tick() - aim.lastEval < 0.3 then return end
+        aim.lastEval = tick()
+
+        local curDir = aimDirFor(myPos, focus, aim.partner, aim.mode)
+        if not curDir then return end
+        local bestScore = aimScore(curDir, myPos, targets)
+        local bestPartner, bestMode = aim.partner, aim.mode
+        if aim.partner and not isModelAlive(aim.partner) then
+            bestPartner, bestMode = nil, "focus"
+        end
+        for _, m in ipairs(targets) do
+            if m ~= focus then
+                for _, mode in ipairs({ "mid", "partner" }) do
+                    local dir = aimDirFor(myPos, focus, m, mode)
+                    if dir then
+                        local sc = aimScore(dir, myPos, targets)
+                        if sc > bestScore then
+                            bestScore, bestPartner, bestMode = sc, m, mode
+                        end
+                    end
+                end
+            end
+        end
+        aim.partner, aim.mode = bestPartner, bestMode
+    end
+
+    local function yawOf(dir) return math.atan2(-dir.X, -dir.Z) end
+
+    local function aimErrorDeg()
+        local hrp = getHRP()
+        if not (hrp and aim.active and aim.focus) then return math.huge end
+        local dir = aimDirFor(hrp.Position, aim.focus, aim.partner, aim.mode)
+        if not dir then return 0 end
+        local look = flat(hrp.CFrame.LookVector)
+        if look.Magnitude < 0.01 then return math.huge end
+        local diff = (yawOf(dir) - yawOf(look.Unit) + math.pi) % (2 * math.pi) - math.pi
+        return math.abs(math.deg(diff))
+    end
+
+    -- 위치는 건드리지 않고 회전 전용 AlignOrientation으로만 몸을 돌린다 (걷기와 안 부딪힘)
+    local aligner, alignerAtt, alignerHrp = nil, nil, nil
+
+    local function destroyAligner()
+        if aligner then pcall(function() aligner:Destroy() end) end
+        if alignerAtt then pcall(function() alignerAtt:Destroy() end) end
+        aligner, alignerAtt, alignerHrp = nil, nil, nil
+    end
+
+    local function getAligner(hrp)
+        if aligner and alignerHrp == hrp and isAliveInst(aligner) then return aligner end
+        destroyAligner()
+        local ok = pcall(function()
+            alignerAtt = Instance.new("Attachment")
+            alignerAtt.Name = "OrbHuntAttachment"
+            alignerAtt.Parent = hrp
+            aligner = Instance.new("AlignOrientation")
+            aligner.Name = "OrbHuntAlign"
+            aligner.Mode = Enum.OrientationAlignmentMode.OneAttachment
+            aligner.Attachment0 = alignerAtt
+            aligner.RigidityEnabled = false
+            aligner.MaxTorque = 1e9
+            aligner.MaxAngularVelocity = math.rad(HCFG.TURN_SPEED_DEG)
+            aligner.Responsiveness = 200
+            aligner.Enabled = false
+            aligner.Parent = hrp
+            alignerHrp = hrp
+        end)
+        if not ok then destroyAligner() end
+        return aligner
+    end
+
+    local function stopAim()
+        aim.active, aim.focus, aim.partner, aim.mode = false, nil, nil, "focus"
+        if aligner then pcall(function() aligner.Enabled = false end) end
+    end
+
+    RunService.Heartbeat:Connect(function()
+        if not (aim.active and aim.focus and MacroPriority.IsActive.OrbHunt) then
+            if aligner and aligner.Enabled then pcall(function() aligner.Enabled = false end) end
+            return
+        end
+        local hrp = getHRP()
+        if not hrp or not isModelAlive(aim.focus) then
+            if aligner then pcall(function() aligner.Enabled = false end) end
+            return
+        end
+        local dir = aimDirFor(hrp.Position, aim.focus, aim.partner, aim.mode)
+        local al = getAligner(hrp)
+        if not (dir and al) then return end
+        pcall(function()
+            al.CFrame = CFrame.Angles(0, yawOf(dir), 0)
+            al.Enabled = true
+        end)
+    end)
+
+    -- ===== 콤보 (PlayerGui.StackUI.StackBar.Combo.Level) =====
+    local function isShownOnScreen(guiObj)
+        local playerGui = LocalPlayer.PlayerGui
+        local node = guiObj
+        while node and node ~= playerGui do
+            if node:IsA("GuiObject") and not node.Visible then return false end
+            if node:IsA("LayerCollector") and not node.Enabled then return false end
+            node = node.Parent
+        end
+        return node == playerGui
+    end
+
+    local function findComboLevel()
+        local ok, level = pcall(function()
+            return LocalPlayer.PlayerGui.StackUI.StackBar.Combo.Level
+        end)
+        if ok and level then return level end
+        local stackUI = LocalPlayer.PlayerGui:FindFirstChild("StackUI")
+        local combo = stackUI and stackUI:FindFirstChild("Combo", true)
+        if not combo then return nil end
+        return combo:FindFirstChild("Level", true) or combo:FindFirstChildWhichIsA("TextLabel", true)
+    end
+
+    -- 저격총을 쏘면 Combo가 사라지는데(Visible 꺼짐) Level 글자는 V로 남으므로, 화면에 보일 때만 인정
+    local function comboIsV()
+        local level = findComboLevel()
+        if not (level and isShownOnScreen(level)) then return false end
+        local ok, raw = pcall(function() return level.Text end)
+        if not (ok and type(raw) == "string") then return false end
+        local clean = raw:gsub("<[^>]->", ""):gsub("[^%a]", ""):upper()
+        return clean == "V"
+    end
+
+    -- ===== 이동 =====
+    local function waitForCharacter(continueFn)
+        local start = tick()
+        while continueFn() and not getHRP() and (tick() - start) < 20 do
+            SetCurrentAction("오브 사냥 - 캐릭터 부활 대기 중")
+            task.wait(0.5)
+        end
+        return getHRP() ~= nil
+    end
+
+    -- Click to Move로 목표까지 이동 (처음 오브로 갈 때 / 죽은 뒤 복귀할 때)
+    -- 처음 한 번만 클릭하고, 목표가 움직였거나 클릭이 씹혀 안 움직일 때만 다시 클릭한다.
+    local function clickMoveTo(getTargetPos, isValid, label)
+        for attempt = 1, 3 do
+            if not (canProceed() and isValid()) then return false end
+            if not waitForCharacter(canProceed) then return false end
+            if not EnsureClickToMoveMode(canProceed) then
+                hwarn("Click to Move 설정 실패 (" .. attempt .. "/3)")
+                task.wait(1)
+                continue
+            end
+
+            SetCurrentAction(string.format("오브 사냥 - %s (%d/3)", label, attempt))
+            startCamera()
+            local clickedPos, lastClickTime = nil, 0
+            local anchorPos, anchorTime = nil, tick()
+            local jumped = false
+            local insideSince = nil
+            local arrived = false
+            local start = tick()
+
+            while canProceed() and isValid() and (tick() - start) < 30 do
+                local hrp = getHRP()
+                local targetPos = getTargetPos()
+                if not (hrp and targetPos) then break end
+                camFocus = targetPos
+
+                local dist = flat(targetPos - hrp.Position).Magnitude
+                if dist <= HCFG.ARRIVE_DIST then
+                    insideSince = insideSince or tick()
+                    if tick() - insideSince >= 0.5 then
+                        arrived = true
+                        break
+                    end
+                else
+                    insideSince = nil
+                    local moving = flat(hrp.AssemblyLinearVelocity).Magnitude > 2
+                    local needClick = clickedPos == nil
+                        or flat(targetPos - clickedPos).Magnitude > HCFG.RECLICK_MOVED_DIST
+                        or (not moving and tick() - lastClickTime > HCFG.RECLICK_IDLE_TIME)
+                    if needClick then
+                        task.wait(0.1) -- 카메라가 목표 위로 옮겨질 시간
+                        rightClickCenter()
+                        clickedPos, lastClickTime = targetPos, tick()
+                    end
+                end
+
+                if not anchorPos or (hrp.Position - anchorPos).Magnitude >= 5 then
+                    anchorPos, anchorTime = hrp.Position, tick()
+                elseif tick() - anchorTime >= 3 and dist > HCFG.ARRIVE_DIST then
+                    if not jumped then
+                        tapKey(Enum.KeyCode.Space, 0.05)
+                        jumped = true
+                        anchorPos, anchorTime = hrp.Position, tick()
+                        clickedPos = nil
+                    else
+                        break
+                    end
+                end
+                task.wait(0.1)
+            end
+
+            stopCamera()
+            if arrived then return true end
+        end
+        return false
+    end
+
+    -- 전투 중 자체 이동용 점프 (기본 조작 스크립트가 Humanoid.Jump를 매 프레임 덮어쓰므로 상태 변경으로 점프)
+    local jumpRayParams = RaycastParams.new()
+    jumpRayParams.FilterType = Enum.RaycastFilterType.Exclude
+    local stuckSince = nil
+    local lastJumpAt = 0
+
+    local function doJump(hum)
+        if tick() - lastJumpAt < 0.5 then return end
+        if hum.FloorMaterial == Enum.Material.Air then return end
+        lastJumpAt = tick()
+        pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+        pcall(function() hum.Jump = true end)
+    end
+
+    local function autoJump(hrp, hum, moveTarget)
+        local dir = flat(moveTarget - hrp.Position)
+        if dir.Magnitude < 1 then
+            stuckSince = nil
+            return
+        end
+        dir = dir.Unit
+
+        local ignore = { LocalPlayer.Character }
+        local npcs = workspace:FindFirstChild("NPCs")
+        if npcs then table.insert(ignore, npcs) end
+        jumpRayParams.FilterDescendantsInstances = ignore
+
+        -- 발목 / 무릎 높이에서 앞으로 레이를 쏴서 가파른 면(경사/벽/턱)이 있으면 점프
+        local floorY = hrp.Position.Y - (hum.HipHeight + hrp.Size.Y / 2)
+        local shouldJump = false
+        for _, h in ipairs({ 0.8, 2.2 }) do
+            local origin = Vector3.new(hrp.Position.X, floorY + h, hrp.Position.Z)
+            local hit = workspace:Raycast(origin, dir * 4, jumpRayParams)
+            if hit and hit.Normal.Y < 0.75 then
+                shouldJump = true
+                break
+            end
+        end
+
+        -- 걸으려는데 0.6초 넘게 거의 안 움직이면 점프
+        if flat(hrp.AssemblyLinearVelocity).Magnitude < 2 then
+            stuckSince = stuckSince or tick()
+            if tick() - stuckSince > 0.6 then
+                shouldJump = true
+                stuckSince = nil
+            end
+        else
+            stuckSince = nil
+        end
+
+        if shouldJump then doJump(hum) end
+    end
+
+    -- 뺑뺑이: 목표를 중심으로 ORBIT_RADIUS 원을 따라 앞쪽 지점으로 계속 걸어감 (다른 미니언은 피함)
+    local function orbitPoint(myPos, centerPos, orbitDir, minions, focus)
+        local rel = flat(myPos - centerPos)
+        local angle = (rel.Magnitude > 0.5) and math.atan2(rel.Z, rel.X) or 0
+        angle = angle + orbitDir * math.rad(HCFG.ORBIT_LEAD_DEG)
+        local point = centerPos + Vector3.new(math.cos(angle), 0, math.sin(angle)) * HCFG.ORBIT_RADIUS
+
+        for _, m in ipairs(minions) do
+            if m ~= focus then
+                local mp = modelHRP(m).Position
+                local away = flat(point - mp)
+                local d = away.Magnitude
+                if d < HCFG.MINION_AVOID_DIST then
+                    local push = (d > 0.5) and away.Unit or flat(myPos - mp).Unit
+                    point = point + push * (HCFG.MINION_AVOID_DIST - d)
+                end
+            end
+        end
+        return Vector3.new(point.X, myPos.Y, point.Z)
+    end
+
+    local function setAutoRotate(hum, value)
+        if hum then pcall(function() hum.AutoRotate = value end) end
+    end
+
+    local function stopWalking()
+        local hrp, hum = getHRP()
+        if hrp and hum then
+            pcall(function() hum:MoveTo(hrp.Position) end)
+        end
+    end
+
+    -- ===== 이벤트 통계용 알림 집계 =====
+    -- ✅ [사용자 요청] 오브/미니언을 잡으면 뜨는 알림(성공 여부 + 받은 보상)을 이벤트 통계에 반영.
+    -- 사냥 중이거나 사냥이 끝난 직후(20초)에 뜬 알림만 본다. 알림 텍스트는 F9에도 그대로 찍는다.
+    -- ⚠️ 정확한 알림 문구를 아직 모르기 때문에 아래 패턴은 임시값이다(문구를 알게 되면 여기만 고치면 됨).
+    getgenv()._OrbHuntNoticeWindowUntil = 0
+
+    local function addOrbHuntReward(itemName, amount)
+        itemName = (itemName or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if itemName == "" or not amount or amount <= 0 then return end
+        getgenv().OrbHuntSessionRewards = getgenv().OrbHuntSessionRewards or {}
+        getgenv().OrbHuntSessionRewards[itemName] = (getgenv().OrbHuntSessionRewards[itemName] or 0) + amount
+        local stats = getgenv()._AllTimeStats
+        stats.OrbHuntRewards = stats.OrbHuntRewards or {}
+        stats.OrbHuntRewards[itemName] = (stats.OrbHuntRewards[itemName] or 0) + amount
+    end
+
+    getgenv()._CountHalloweenNotice = function(child)
+        if not (child and child:IsA("Frame")) then return end
+        if tick() > (getgenv()._OrbHuntNoticeWindowUntil or 0) then return end
+
+        local texts = {}
+        for _, desc in ipairs(child:GetDescendants()) do
+            if desc:IsA("TextLabel") and desc.Text ~= "" then
+                table.insert(texts, (desc.Text:gsub("<[^>]->", "")))
+            end
+        end
+        if #texts == 0 then return end
+        hlog("알림: " .. table.concat(texts, " | "))
+
+        local isSuccess, isFail, changed = false, false, false
+        for _, t in ipairs(texts) do
+            local lower = t:lower()
+            if lower:find("fail") or lower:find("실패") then
+                isFail = true
+            elseif lower:find("success") or lower:find("defeat") or lower:find("cleared")
+                or lower:find("killed") or lower:find("성공") then
+                isSuccess = true
+            end
+
+            local amountStr, itemName = t:match("You've got (%d+)%s+(.-)!?$")
+            if not amountStr then
+                itemName = t:match("You've got an? (.-)[!%.]?$")
+                if itemName then amountStr = "1" end
+            end
+            if not amountStr then
+                amountStr, itemName = t:match("You've received (%d+)%s+(.-)!?$")
+            end
+            if amountStr and itemName then
+                addOrbHuntReward(itemName, tonumber(amountStr))
+                changed = true
+            end
+        end
+
+        local stats = getgenv()._AllTimeStats
+        if isFail then
+            getgenv().OrbHuntSessionFailCount = (getgenv().OrbHuntSessionFailCount or 0) + 1
+            stats.OrbHuntFailCount = (stats.OrbHuntFailCount or 0) + 1
+            changed = true
+        elseif isSuccess then
+            getgenv().OrbHuntSessionSuccessCount = (getgenv().OrbHuntSessionSuccessCount or 0) + 1
+            stats.OrbHuntSuccessCount = (stats.OrbHuntSuccessCount or 0) + 1
+            changed = true
+        end
+        if changed then getgenv()._SaveAllTimeStats() end
+    end
+
+    -- ===== 사냥 본체 =====
+    -- Emergency(레어 바이옴 자동 팝핑)가 오면: 다 멈추고 "준비됐다"고 알린 뒤 끝날 때까지 대기.
+    -- 반환: Emergency로 멈췄었으면 true (호출부가 복귀 단계로 넘어가야 함)
+    local function pauseForEmergency()
+        if not Settings.Emergency then return false end
+        stopAim()
+        releaseInputs()
+        stopWalking()
+        stopCamera()
+        local _, hum = getHRP()
+        setAutoRotate(hum, true)
+        SetCurrentAction("오브 사냥 - 긴급 기능(레어 바이옴 팝핑) 대기 중")
+        Settings.EmergencyReady = true
+        local waitStart = tick()
+        while Settings.Emergency and (tick() - waitStart) < 600 do
+            task.wait(0.5)
+        end
+        Settings.EmergencyReady = false
+        return true
+    end
+
+    local function huntOrb(orb)
+        local orbKey = normalizeName(orb.Name)
+        hlog("오브 감지: " .. orb.Name)
+        getgenv()._OrbHuntNoticeWindowUntil = math.huge
+
+        if not ensureEden() then
+            hwarn(HCFG.AURA_NAME .. " 장착을 못 해서 이번 오브는 잠시 뒤 다시 시도")
+            return
+        end
+        local moved = clickMoveTo(function()
+            local h = modelHRP(orb)
+            return h and h.Position
+        end, function()
+            return isModelAlive(orb)
+        end, "오브(" .. orb.Name .. ")로 이동 중")
+        if not moved then
+            if canProceed() then hwarn("오브(" .. orb.Name .. ")까지 이동 실패 - 잠시 뒤 다시 시도") end
+            return
+        end
+        hlog("오브(" .. orb.Name .. ") 도착 - 미니언 사냥 시작")
+
+        local deadline = tick() + HCFG.HUNT_TIMEOUT
+        local focus = nil
+        local skillIndex = 1
+        local killCount = 0
+        local orbAttackLogged = false
+        local ultLockUntil = 0
+        local ultRetryAt = 0
+        local fightChar = LocalPlayer.Character
+        local orbitDir = (math.random() < 0.5) and 1 or -1
+        local nextFlip = tick() + HCFG.ORBIT_FLIP_MIN + math.random() * (HCFG.ORBIT_FLIP_MAX - HCFG.ORBIT_FLIP_MIN)
+        local _, startHum = getHRP()
+        setAutoRotate(startHum, false) -- 도는 동안 몸은 항상 공격 방향을 보게
+
+        while canKeepHunting() and tick() < deadline do
+            -- 레어 바이옴 팝핑이 오면 멈췄다가, 끝나면 복귀 단계로
+            if pauseForEmergency() then
+                fightChar = nil
+            end
+
+            local hrp, hum = getHRP()
+
+            -- 죽었거나(Emergency 재설정 포함): 스킬 멈추고 부활 -> (필요하면 Eden 재장착) -> Click to Move로 복귀
+            if not hrp or LocalPlayer.Character ~= fightChar then
+                stopAim()
+                releaseInputs()
+                SetCurrentAction("오브 사냥 - 부활/복귀 준비 중")
+                if not waitForCharacter(canKeepHunting) then break end
+                task.wait(1)
+                if Settings.Emergency then continue end
+                if needReequip and not ensureEden() then break end
+
+                local minionsNow = getMinions(orbKey)
+                local myHrp = getHRP()
+                local returnTarget = (isModelAlive(orb) and orb) or (myHrp and nearestModel(minionsNow, myHrp.Position))
+                if not returnTarget then
+                    hlog("오브와 미니언이 모두 사라짐 - 종료")
+                    break
+                end
+                hlog("Click to Move로 전투 장소 복귀")
+                local ok = clickMoveTo(function()
+                    local h = modelHRP(returnTarget)
+                    return h and h.Position
+                end, function()
+                    return isModelAlive(returnTarget)
+                end, "전투 장소로 복귀 중")
+                if not ok then
+                    if not isModelAlive(orb) and #getMinions(orbKey) == 0 then break end
+                    fightChar = nil
+                    task.wait(0.5)
+                    continue
+                end
+                fightChar = LocalPlayer.Character
+                focus = nil
+                local _, newHum = getHRP()
+                setAutoRotate(newHum, false)
+                continue
+            end
+
+            -- Eden이 풀렸으면 다시 장착 (스킬은 잠시 멈춤)
+            if needReequip then
+                stopWalking()
+                if not ensureEden() then break end
+                continue
+            end
+
+            local minions = getMinions(orbKey)
+
+            -- 집중 대상 정리: 미니언이 죽었으면 다음, 오브를 치던 중 미니언이 새로 나오면 미니언 먼저
+            if focus and focus ~= orb and not isModelAlive(focus) then
+                killCount = killCount + 1
+                hlog("미니언 처치 (" .. killCount .. ")")
+                focus = nil
+            end
+            if focus == orb and (#minions > 0 or not isModelAlive(orb)) then
+                focus = nil
+            end
+            if not focus then
+                focus = nearestModel(minions, hrp.Position)
+            end
+
+            -- 미니언을 다 잡으면 오브 공격
+            local attackingOrb = false
+            if not focus then
+                if not isModelAlive(orb) then
+                    hlog("오브(" .. orb.Name .. ")와 미니언 정리 완료")
+                    break
+                end
+                focus = orb
+                attackingOrb = true
+                if not orbAttackLogged then
+                    orbAttackLogged = true
+                    hlog("미니언 전부 처치 - 오브 공격 시작")
+                end
+            elseif focus == orb then
+                attackingOrb = true
+            end
+
+            local targets = attackingOrb and { orb } or minions
+            local focusPos = modelHRP(focus).Position
+            local dist = flat(focusPos - hrp.Position).Magnitude
+            updateAimChoice(hrp.Position, focus, targets)
+
+            -- 저격총: 오브를 칠 때만, 콤보 V가 화면에 보이면 거리 상관없이 바로.
+            -- 콤보가 실제로 사라질 때까지(=발사될 때까지) R만 0.2초 간격으로 다시 누름(최대 2초).
+            if attackingOrb and tick() >= ultRetryAt and comboIsV() then
+                hlog("콤보 V - 저격총(R) 사용")
+                SetCurrentAction("오브 사냥 - 저격총(R) 사용 중")
+                releaseInputs()
+                local turnStart = tick()
+                while aimErrorDeg() > HCFG.FACE_TOLERANCE_DEG and tick() - turnStart < 0.25 do
+                    task.wait()
+                end
+                local burstStart = tick()
+                local fired = false
+                while tick() - burstStart < 2 do
+                    if not getHRP() or LocalPlayer.Character ~= fightChar or not isModelAlive(orb) then break end
+                    tapKey(HCFG.ULT_KEY, 0.03)
+                    local checkStart = tick()
+                    while tick() - checkStart < 0.2 do
+                        task.wait()
+                        if not comboIsV() then
+                            fired = true
+                            break
+                        end
+                    end
+                    if fired then break end
+                end
+                if fired then
+                    ultLockUntil = tick() + HCFG.ULT_LOCK_TIME
+                else
+                    hwarn("R을 2초 동안 눌러도 콤보가 안 사라짐 - 잠깐 일반 스킬 쓰고 다시 시도")
+                    ultRetryAt = tick() + 1.5
+                end
+                continue
+            end
+
+            if dist > HCFG.ENGAGE_DIST then
+                -- 멀면 걸어서 접근만 (스킬 X)
+                SetCurrentAction(string.format("오브 사냥 - %s에게 접근 중 (거리 %d)",
+                    attackingOrb and "오브" or "미니언", math.floor(dist)))
+                hum:MoveTo(focusPos)
+                autoJump(hrp, hum, focusPos)
+                task.wait(0.1)
+                continue
+            end
+
+            -- 가까우면 뺑뺑이 돌면서 스킬
+            if tick() > nextFlip then
+                orbitDir = -orbitDir
+                nextFlip = tick() + HCFG.ORBIT_FLIP_MIN + math.random() * (HCFG.ORBIT_FLIP_MAX - HCFG.ORBIT_FLIP_MIN)
+            end
+            local walkTo = orbitPoint(hrp.Position, focusPos, orbitDir, minions, focus)
+            hum:MoveTo(walkTo)
+            autoJump(hrp, hum, walkTo)
+            if attackingOrb then
+                SetCurrentAction(string.format("오브 사냥 - 오브 공격 중 (거리 %d)", math.floor(dist)))
+            else
+                SetCurrentAction(string.format("오브 사냥 - 미니언 공격 중 (남은 %d마리)", #minions))
+            end
+
+            local canCast = getHRP() ~= nil and LocalPlayer.Character == fightChar
+                and aimErrorDeg() <= HCFG.FACE_TOLERANCE_DEG
+                and tick() >= ultLockUntil
+                and not Settings.Emergency
+            if canCast then
+                local keys = attackingOrb and HCFG.ORB_SKILL_KEYS or HCFG.SKILL_KEYS
+                tapKey(keys[(skillIndex - 1) % #keys + 1], 0.03)
+                skillIndex = skillIndex + 1
+                task.wait(HCFG.SKILL_GAP)
+            else
+                task.wait(0.05)
+            end
+        end
+
+        if canKeepHunting() and tick() >= deadline then
+            hwarn("사냥 시간(" .. HCFG.HUNT_TIMEOUT .. "초) 초과 - 이번 오브 종료")
+        elseif not canKeepHunting() then
+            local blocked = otherPlayerBlocking()
+            if blocked and toggleOn() then
+                hlog("다른 플레이어(" .. blocked .. ") 접속으로 사냥 중지 - 다른 기능에 자리 넘김")
+            end
+        end
+    end
+
+    -- ===== 신호 / 실행 =====
+    getgenv()._IsOrbHuntSignaled = function()
+        if not toggleOn() then return false end
+        if MacroPriority.IsActive.OrbHunt then return true end
+        if Settings.Emergency or otherPlayerBlocking() then return false end
+        return findOrb() ~= nil
+    end
+
+    RunOrbHunt = function()
+        if not CanStartMacro("OrbHunt") then return end
+        if not canProceed() then return end
+        local orb = findOrb()
+        if not orb then return end
+        StartMacro("OrbHunt")
+        SetCurrentAction("오브 사냥 - 시작")
+
+        -- Eden 해제 감시 (사냥하는 동안만): 장착 버튼 글자가 "Equip"으로 바뀌면 재장착 예약
+        local watching = true
+        task.spawn(function()
+            while watching do
+                task.wait(0.5)
+                if edenEquipButton then
+                    if not isAliveInst(edenEquipButton) then
+                        edenEquipButton = nil
+                    elseif buttonText(edenEquipButton) == "Equip" then
+                        if not needReequip then hwarn(HCFG.AURA_NAME .. " 해제 감지 - 다시 장착 예정") end
+                        needReequip = true
+                    end
+                end
+            end
+        end)
+
+        local ok, err = pcall(huntOrb, orb)
+        watching = false
+        if not ok then hwarn("오류: " .. tostring(err)) end
+
+        -- 무슨 일이 있어도 원래 상태로 정리
+        stopAim()
+        releaseInputs()
+        stopWalking()
+        stopCamera()
+        local _, hum = getHRP()
+        setAutoRotate(hum, true)
+        getgenv()._OrbHuntNoticeWindowUntil = tick() + 20 -- 끝난 뒤에 늦게 뜨는 알림도 집계
+
+        if isModelAlive(orb) then
+            orbSkipUntil[orb] = tick() + HCFG.FAILED_ORB_SKIP
+        end
+        if Settings.Emergency then
+            Settings.EmergencyReady = true
+        end
+        StopMacro("OrbHunt")
+        SetCurrentAction("")
+        -- ⚠️ 여기서 StartMacro("Fishing")을 부르지 않는다 (RegisterSingleAction 규칙 2)
+    end
+end
+
+RegisterSingleAction({
+    name = "OrbHunt",
+    signalFlagName = "OrbHuntWantsSlot",
+    logName = "오브 & 미니언 자동 사냥",
+    -- 오브가 실제로 있을 때만 실행 (토글을 켠 순간 무조건 한 번 실행하지 않음)
+    forceInitialRun = false,
+    tickInterval = 1,
+    isEnabled = function()
+        return Settings.Sols.autoOrbHunt and Settings.Sols.masterMacroEnabled
+    end,
+    isSignaled = function()
+        local signaled = getgenv()._IsOrbHuntSignaled()
+        -- 신호가 사라지면(오브 없음/다른 플레이어 접속) 양보 요청 플래그도 내려서 낚시가 바로 이어가게
+        if not signaled then getgenv().OrbHuntWantsSlot = false end
+        return signaled
+    end,
+    run = RunOrbHunt,
+})
+
+
 
 -- ✅ [사용자 요청] 바이옴별로 어떤 포션을 어떤 순서(우선순위)로, 얼마나 사용할지를
 -- 테이블로 관리한다. 새 바이옴을 추가하려면 이 테이블에 새 키를 추가하면 되고, 특정
@@ -7167,7 +8166,8 @@ local function performRareBiomePopSequence(biomeName)
         -- 메모리 매치만 단독으로 돌고 있을 땐 무조건 2초만 대기 후 캐릭터를 강제 리스폰시켜
         -- 카드 게임 도중에 끊기는 문제가 있었음. Memory Match 진행 중에도 안전 지점을 기다리도록 확장.
         -- ✅ [사용자 요청] 포션 자동 제작 진행 중에도 동일하게 안전 지점까지 기다려준다.
-        if (Settings.Sols and Settings.Sols.autoFishActive) or getgenv().MemoryMatchActive or MacroPriority.IsActive.PotionCraft then
+        if (Settings.Sols and Settings.Sols.autoFishActive) or getgenv().MemoryMatchActive or MacroPriority.IsActive.PotionCraft
+            or MacroPriority.IsActive.OrbHunt then
             local waitLimit = 60
             local elapsed = 0
             while not Settings.EmergencyReady and elapsed < waitLimit do
@@ -7782,6 +8782,10 @@ getgenv()._AllTimeStats = {
     -- ✅ [사용자 요청] 바다 아이템 자동 수집 성공 횟수 / 얻은 보상들
     SeaItemSuccessCount = 0,
     SeaItemRewards = {}, -- 아이템명 -> 누적 개수
+    -- ✅ [사용자 요청] "2026 Halloween" - 오브 & 미니언 자동 사냥 성공/실패 횟수, 얻은 보상들
+    OrbHuntSuccessCount = 0,
+    OrbHuntFailCount = 0,
+    OrbHuntRewards = {}, -- 아이템명 -> 누적 개수
 }
 
 -- 디스크에서 올타임 통계를 불러온다 (스크립트를 처음 켤 때 한 번)
@@ -9392,6 +10396,9 @@ do
                 "오토 아이템 사용 : " .. (Settings.Sols.autoBiomeUseReady and "ON" or "OFF"),
                 -- ✅ [사용자 요청] 상인 자동 구매 토글 여부도 함께 전송
                 "상인 자동 구매 : " .. (Settings.Sols.autoMerchantBuy and "ON" or "OFF"),
+                -- ✅ [사용자 요청] 2026 Halloween 이벤트 기능
+                "오브 & 미니언 자동 사냥 : " .. (Settings.Sols.autoOrbHunt and "ON" or "OFF"),
+                "다른 플레이어 접속 시 중지 : " .. (Settings.Sols.orbHuntStopOnPlayer and "ON" or "OFF"),
             }
 
             -- ✅ [사용자 요청] 상인 자동 구매가 켜져 있으면, 무엇을 사도록 설정되어 있는지도
@@ -9793,6 +10800,17 @@ FeatureTab.Toggle({
 -- 이벤트 때 재사용할 수 있도록 그대로 남겨두고, 토글이 없으니 설정값은 기본값(false)으로
 -- 고정되어 절대 실행되지 않는다. 다시 쓰려면 여기에 토글 2개만 다시 추가하면 된다.
 
+-- ✅ [사용자 요청] "2026 Halloween" 이벤트 기능
+FeatureTab.Label({ Text = "2026 Halloween" })
+
+FeatureTab.Toggle({
+    Text = "오브 & 미니언 자동 사냥",
+    Enabled = Settings.Sols.autoOrbHunt,
+    Callback = function(v)
+        Settings.Sols.autoOrbHunt = v
+    end
+})
+
 -- =============================
 -- [ 탭2-2: 기타 설정 - 메모리 매치 이동 / 오토 아이템 사용 부가 토글 ]
 -- =============================
@@ -9825,6 +10843,18 @@ EtcSettingTab.Toggle({
     Enabled = Settings.Sols.useBiomeRandomizerItem,
     Callback = function(v)
         Settings.Sols.useBiomeRandomizerItem = v
+    end
+})
+
+-- ✅ [사용자 요청] 오브 & 미니언 자동 사냥 사이드 기능 - 예외 목록에 없는 다른 플레이어가 서버에
+-- 있으면 오브 사냥만 즉시 멈추고(다른 기능은 그대로), 그 플레이어가 나가면 다시 동작한다.
+EtcSettingTab.Label({ Text = "오브 & 미니언 자동 사냥" })
+
+EtcSettingTab.Toggle({
+    Text = "다른 플레이어 접속 시 중지",
+    Enabled = Settings.Sols.orbHuntStopOnPlayer,
+    Callback = function(v)
+        Settings.Sols.orbHuntStopOnPlayer = v
     end
 })
 
