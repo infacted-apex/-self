@@ -9617,10 +9617,8 @@ local function updateAutoBiomeUseState()
     end
 end
 
--- ✅ [사용자 요청] 낚시 위치 여러 곳 - 1번이 원래 쓰던 자리(Place1).
--- 매 캐스팅마다, 지금 쓰던 자리가 비어 있으면 계속 그 자리를 쓰고, 다른 플레이어가 서 있으면
--- 목록 순서대로 비어 있는 다음 자리로 옮긴다 (같은 서버의 여러 계정이 서로 다른 자리에서 낚시하게).
--- 전부 차 있으면 다른 플레이어와 가장 멀리 떨어진 자리를 고른다.
+-- ✅ [사용자 요청] 낚시 위치 여러 곳 - 기타 설정 탭의 "낚시 위치" 드롭다운에서 고른 자리에서만 낚시한다.
+-- (자동으로 자리를 옮기지 않음). 1번이 원래 쓰던 자리(Place1).
 getgenv()._FishingSpots = {
     Vector3.new(72.6785, 87.0000, -351.9299), -- 1. 원래 자리
     Vector3.new(67.2111, 87.0000, -342.8269), -- 2
@@ -9633,41 +9631,9 @@ getgenv()._FishingSpotIndex = getgenv()._FishingSpotIndex or 1
 -- 반환: 위치(Vector3), 번호
 getgenv()._ChooseFishingSpot = function()
     local spots = getgenv()._FishingSpots
-    local OCCUPIED_DIST = 5 -- 이 거리(수평) 안에 다른 플레이어가 있으면 그 자리는 차 있는 것
-
-    local function nearestOtherPlayerDist(pos)
-        local best = math.huge
-        for _, plr in ipairs(Services.Players:GetPlayers()) do
-            if plr ~= LocalPlayer then
-                local char = plr.Character
-                local hrp = char and char:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    local d = Vector3.new(hrp.Position.X - pos.X, 0, hrp.Position.Z - pos.Z).Magnitude
-                    if d < best then best = d end
-                end
-            end
-        end
-        return best
-    end
-
-    local current = getgenv()._FishingSpotIndex or 1
-    if spots[current] and nearestOtherPlayerDist(spots[current]) > OCCUPIED_DIST then
-        return spots[current], current
-    end
-    for i, pos in ipairs(spots) do
-        if nearestOtherPlayerDist(pos) > OCCUPIED_DIST then
-            getgenv()._FishingSpotIndex = i
-            return pos, i
-        end
-    end
-    -- 전부 차 있음: 다른 플레이어와 가장 멀리 떨어진 자리
-    local bestIdx, bestDist = 1, -1
-    for i, pos in ipairs(spots) do
-        local d = nearestOtherPlayerDist(pos)
-        if d > bestDist then bestIdx, bestDist = i, d end
-    end
-    getgenv()._FishingSpotIndex = bestIdx
-    return spots[bestIdx], bestIdx
+    local idx = getgenv()._FishingSpotIndex or 1
+    if not spots[idx] then idx = 1 end
+    return spots[idx], idx
 end
 
 local autoFishConnection = nil
@@ -11117,6 +11083,20 @@ EtcSettingTab.Toggle({
     Enabled = Settings.Sols.useBiomeRandomizerItem,
     Callback = function(v)
         Settings.Sols.useBiomeRandomizerItem = v
+    end
+})
+
+-- ✅ [사용자 요청] 낚시 위치 선택 드롭다운 (1번 = 원래 자리)
+EtcSettingTab.Label({ Text = "자동 낚시" })
+
+EtcSettingTab.Dropdown({
+    Text = "낚시 위치",
+    Options = { "1번 (기본)", "2번", "3번", "4번", "5번" },
+    Callback = function(value)
+        local num = tonumber(tostring(value or ""):match("%d+"))
+        if num and getgenv()._FishingSpots[num] then
+            getgenv()._FishingSpotIndex = num
+        end
     end
 })
 
