@@ -4620,6 +4620,14 @@ do
         return false
     end
 
+    -- 설정 창(구버전 ESC 메뉴 = SettingsShield)이 화면에 보이는가
+    local function isSettingsWindowOpen()
+        local ok, shown = pcall(function()
+            return coreGui.RobloxGui.SettingsClippingShield.SettingsShield.Visible
+        end)
+        return ok and shown == true
+    end
+
     -- 지금 Click to Move인가: 설정값을 읽을 수 있으면 그것만 믿고, 못 읽으면 메뉴 UI로 판단
     -- (메뉴 UI는 닫혀 있을 때 예전 값이 남아 있어서 "켜졌다"고 잘못 볼 수 있음)
     local function isClickToMoveNow(selector)
@@ -4632,7 +4640,13 @@ do
     -- 엔터를 눌러 메뉴 페이지가 바뀌는 동안 MenuIsOpen 값이 잠깐 false로 읽히는 순간이 있는데,
     -- 기존엔 그 한 번만 보고 "메뉴가 닫혔다"고 판단해서 중간에 포기했다. 그러면 메뉴는 실제로
     -- 열린 채로 남고, 다음 재시도가 "닫혀 있다"고 보고 ESC를 눌러서 그 메뉴를 닫아버렸다.
-    -- 이제는 1.5초 동안 계속 닫혀 있어야만 닫힌 걸로 보고, 중단할 때는 이유를 F9에 남긴다.
+    -- 이제는 1.5초 동안 계속 닫혀 있어야만 닫힌 걸로 본다.
+    -- ✅ [사용자 요청] Click to Move 관련 로그는 F9에 안 띄운다 (디버깅이 필요하면 true로)
+    local CTM_LOG = false
+    local function ctmLog(fn, msg)
+        if CTM_LOG then fn(msg) end
+    end
+
     local function menuStillOpen()
         if isMenuOpenNow() then return true end
         local start = tick()
@@ -4651,46 +4665,62 @@ do
         -- 중간 확인: 계속 진행 조건이 꺼졌으면 메뉴를 닫고 중단, 메뉴가 정말로 닫혔으면 그냥 중단
         local function stepOk(stepName)
             if not shouldContinueFn() then
-                print("[Click to Move] " .. stepName .. " 단계에서 중단 - 다른 기능으로 넘어가야 해서 메뉴를 닫음")
+                ctmLog(print, "[Click to Move] " .. stepName .. " 단계에서 중단 - 다른 기능으로 넘어가야 해서 메뉴를 닫음")
                 closeMenu()
                 return false
             end
             if not menuStillOpen() then
-                warn("[Click to Move] " .. stepName .. " 단계에서 메뉴가 닫혀 있음 - 중단")
+                ctmLog(warn, "[Click to Move] " .. stepName .. " 단계에서 메뉴가 닫혀 있음 - 중단")
                 return false
             end
             return true
         end
 
-        -- 1. 메뉴 열기 (닫혀 있을 때만 ESC) -> 실제로 열릴 때까지 확인
-        if not isMenuOpenNow() then
-            pressKey(Enum.KeyCode.Escape, 0.1)
-            if not waitMenuState(true, 3) then
-                warn("[Click to Move] ESC를 눌러도 메뉴가 열리지 않음")
-                return false -- 안 열렸으면 더 누르지 않고 실패 (다음 시도는 쿨다운 후)
-            end
+        -- ✅ [사용자 요청] 구버전/신버전 ESC 메뉴 둘 다 대응:
+        --   ESC -> 설정 창이 열려 있으면(구버전) 바로 Tab
+        --       -> 설정 창이 안 열려 있으면(신버전) 아래 키 3번 -> 엔터 -> Tab
+        -- 1. 이미 메뉴가 열려 있으면 먼저 닫고, ESC로 새로 연다 (어느 화면에서 시작하는지 확실하게)
+        if isMenuOpenNow() then
+            if not closeMenu() then return false end
+        end
+        pressKey(Enum.KeyCode.Escape, 0.1)
+        if not waitMenuState(true, 3) then
+            ctmLog(warn, "[Click to Move] ESC를 눌러도 메뉴가 열리지 않음")
+            return false -- 안 열렸으면 더 누르지 않고 실패 (다음 시도는 쿨다운 후)
         end
         task.wait(0.6) -- 메뉴 열리는 애니메이션이 끝날 시간
-        if not stepOk("메뉴 열기") then return false end
+        if not shouldContinueFn() then closeMenu(); return false end
 
-        -- 2. ✅ [사용자 요청] 아래 키 3번 -> 엔터 1번 -> Tab 1번
-        -- (이 사이에는 메뉴 상태를 키마다 확인하지 않는다 - 페이지 전환 중 잘못 읽히는 걸 막기 위해)
-        for _ = 1, 3 do
-            if not shouldContinueFn() then break end
-            pressKey(Enum.KeyCode.Down, 0.1)
-            task.wait(0.25)
+        -- 2. 설정 창이 열려 있는지 확인 (열리는 데 조금 걸릴 수 있어서 최대 1초 확인)
+        local settingsOpen = isSettingsWindowOpen()
+        if not settingsOpen then
+            local checkStart = tick()
+            while tick() - checkStart < 1 do
+                task.wait(0.1)
+                if isSettingsWindowOpen() then settingsOpen = true; break end
+            end
         end
-        if not stepOk("아래 키 3번") then return false end
-        task.wait(0.2)
-        pressKey(Enum.KeyCode.Return, 0.1)
-        task.wait(0.8) -- 엔터 처리(페이지 전환) 대기
-        if not stepOk("엔터") then return false end
 
+        if not settingsOpen then
+            -- 신버전 메뉴: 아래 키 3번 -> 엔터 (엔터 뒤에 메뉴가 닫혀 보이는 건 정상)
+            for _ = 1, 3 do
+                if not shouldContinueFn() then closeMenu(); return false end
+                pressKey(Enum.KeyCode.Down, 0.1)
+                task.wait(0.25)
+            end
+            task.wait(0.2)
+            pressKey(Enum.KeyCode.Return, 0.1)
+            task.wait(0.8) -- 엔터 처리 대기
+            if not shouldContinueFn() then closeMenu(); return false end
+        end
+
+        -- 3. Tab -> 설정 탭이 열릴 때까지 최대 3초 확인
         pressKey(Enum.KeyCode.Tab, 0.1)
-        task.wait(1) -- 탭 전환 대기
+        waitMenuState(true, 3)
+        task.wait(0.7) -- 탭 전환 대기
         if not stepOk("Tab") then return false end
 
-        -- 3. ✅ [사용자 요청] Tab 누른 뒤 다시 확인: 이미 Click To Move면 바로 ESC로 닫고 끝
+        -- 4. ✅ [사용자 요청] Tab 누른 뒤 다시 확인: 이미 Click To Move면 바로 ESC로 닫고 끝
         -- (메뉴가 열려 있는 지금은 메뉴 화면 값이 최신이므로, 강제 확인 모드에서는 화면 값을 믿는다)
         -- ✅ 메뉴가 열려 있는 지금은 화면 값이 최신이므로 화면 값을 우선 믿는다
         -- (설정값이 실제와 다르게 읽히는 환경에서, 꺼져 있는데 "켜져 있다"고 보고 닫아버리는 것 방지)
@@ -4702,17 +4732,17 @@ do
             alreadyOn = (not forceMenuCheck) and isClickToMoveNow(nil)
         end
         if alreadyOn then
-            print("[Click to Move] Tab 후 확인 - 이미 Click To Move라서 메뉴를 닫음")
+            ctmLog(print, "[Click to Move] Tab 후 확인 - 이미 Click To Move라서 메뉴를 닫음")
             closeMenu()
             return true
         end
         if not selector then
-            warn("[Click to Move] Tab 후 이동 방식(Movement Mode) 항목을 찾지 못함 - 중단")
+            ctmLog(warn, "[Click to Move] Tab 후 이동 방식(Movement Mode) 항목을 찾지 못함 - 중단")
             closeMenu()
             return false
         end
 
-        -- 4. Click To Move 항목이 Hover될 때까지 아래 키 (안 되면 위 키)
+        -- 5. Click To Move 항목이 Hover될 때까지 아래 키 (안 되면 위 키)
         local hoverSuccess = false
         for _, key in ipairs({ Enum.KeyCode.Down, Enum.KeyCode.Up }) do
             for _ = 1, 50 do
@@ -4727,7 +4757,7 @@ do
             if hoverSuccess or not (shouldContinueFn() and menuStillOpen()) then break end
         end
 
-        -- 5. 오른쪽 키로 Click To Move 선택
+        -- 6. 오른쪽 키로 Click To Move 선택
         if hoverSuccess then
             for _ = 1, 30 do
                 if not (shouldContinueFn() and menuStillOpen()) then break end
@@ -4757,14 +4787,14 @@ do
         if not loggedSetting then
             loggedSetting = true
             pcall(function()
-                print(string.format("[Click to Move] 게임 강제 설정: %s / 내 설정: %s",
+                ctmLog(print, string.format("[Click to Move] 게임 강제 설정: %s / 내 설정: %s",
                     tostring(LocalPlayer.DevComputerMovementMode),
                     tostring(UserSettings():GetService("UserGameSettings").ComputerMovementMode)))
             end)
         end
         if forceMenuCheck and not getgenv()._ClickToMoveSettingUntrusted then
             getgenv()._ClickToMoveSettingUntrusted = true
-            warn("[Click to Move] 클릭해도 캐릭터가 안 움직임 - 메뉴에서 직접 확인/설정함")
+            ctmLog(warn, "[Click to Move] 클릭해도 캐릭터가 안 움직임 - 메뉴에서 직접 확인/설정함")
         end
         local trustSetting = not forceMenuCheck and not getgenv()._ClickToMoveSettingUntrusted
 
@@ -4795,7 +4825,7 @@ do
         getgenv()._ClickToMoveBusy = true
         local ok, result = pcall(inner, shouldContinueFn, forceMenuCheck or not trustSetting)
         if not ok then
-            warn("[Click to Move 설정 오류] " .. tostring(result))
+            ctmLog(warn, "[Click to Move 설정 오류] " .. tostring(result))
             pcall(closeMenu)
         end
         getgenv()._ClickToMoveBusy = false
@@ -4807,7 +4837,7 @@ do
             getgenv()._ClickToMoveFailAt = tick()
             getgenv()._ClickToMoveFailStreak = (getgenv()._ClickToMoveFailStreak or 0) + 1
             if getgenv()._ClickToMoveFailStreak == 3 then
-                warn("[Click to Move] 설정을 3번 연속 실패 - 30초 동안 메뉴 조작을 멈춤 (설정에서 직접 Click To Move로 바꿔두면 해결됨)")
+                ctmLog(warn, "[Click to Move] 설정을 3번 연속 실패 - 30초 동안 메뉴 조작을 멈춤 (설정에서 직접 Click To Move로 바꿔두면 해결됨)")
             end
         end
         return success
@@ -7742,7 +7772,6 @@ do
             if not (canProceed() and isValid()) then return false end
             if not waitForCharacter(canProceed) then return false end
             if not EnsureClickToMoveMode(canProceed) then
-                hwarn("Click to Move 설정 실패 (" .. attempt .. "/3)")
                 task.wait(1)
                 continue
             end
@@ -8070,6 +8099,127 @@ do
         return true
     end
 
+    -- ✅ [사용자 요청] 스킬(E키)을 쓰다가 근처 NPC한테 말을 걸어서 대화창이 뜨는 경우가 있다.
+    -- 대화창이 떠 있으면 스킬을 멈추고, [ Leave ] 버튼을 찾아서 대화창이 꺼질 때까지 누른다.
+    local function findStrayDialogButtons()
+        local mainInterface = LocalPlayer.PlayerGui:FindFirstChild("MainInterface")
+        local dialog = mainInterface and mainInterface:FindFirstChild("Dialog")
+        if not dialog then return nil end
+        if dialog:IsA("GuiObject") and not dialog.Visible then return nil end
+        local choices = dialog:FindFirstChild("Choices")
+        if not choices then return nil end
+        local function cleanLabel(t)
+            return ((t or ""):gsub("<[^>]->", ""):lower():gsub("[^%a]", ""))
+        end
+        -- 버튼 글자가 버튼 자체(Text)에 있을 수도, 안쪽 TextLabel에 있을 수도 있어서 둘 다 본다
+        local function isLeaveButton(btn)
+            if btn:IsA("TextButton") and cleanLabel(btn.Text) == "leave" then return true end
+            for _, d in ipairs(btn:GetDescendants()) do
+                if (d:IsA("TextLabel") or d:IsA("TextButton")) and cleanLabel(d.Text) == "leave" then
+                    return true
+                end
+            end
+            return false
+        end
+        local buttons, leave = {}, nil
+        for _, child in ipairs(choices:GetDescendants()) do
+            if child:IsA("GuiButton") and child.Visible and child.AbsoluteSize.X > 0 then
+                table.insert(buttons, child)
+                if not leave and isLeaveButton(child) then leave = child end
+            end
+        end
+        if #buttons == 0 then return nil end
+        return buttons, leave
+    end
+
+    -- ✅ [사용자 요청] 애초에 말을 안 걸게: 사냥하는 동안 "Talk" 상호작용(E)을 이 클라이언트에서만 잠시 끈다.
+    -- (Jack The Pumpkin 같은 NPC. 사냥이 끝나면 원래대로 켠다)
+    -- (껐던 목록은 getgenv에 둬서, 사냥 도중 스크립트를 다시 실행해도 시작할 때 원래대로 켜진다)
+    getgenv()._OrbHuntDisabledPrompts = getgenv()._OrbHuntDisabledPrompts or {}
+    local function isTalkPrompt(p)
+        return p:IsA("ProximityPrompt") and (p.ActionText or ""):lower():find("talk") ~= nil
+    end
+    local function disableTalkPrompt(p)
+        if isTalkPrompt(p) and p.Enabled then
+            p.Enabled = false
+            getgenv()._OrbHuntDisabledPrompts[p] = true
+        end
+    end
+    local talkPromptConn = nil
+    local function suppressTalkPrompts()
+        -- 시작할 때 한 번 전체 확인 + 사냥 중에는 새로 화면에 뜨는 상호작용만 바로 끈다 (가벼움)
+        for _, d in ipairs(workspace:GetDescendants()) do
+            if d:IsA("ProximityPrompt") then disableTalkPrompt(d) end
+        end
+        if talkPromptConn then talkPromptConn:Disconnect() end
+        talkPromptConn = game:GetService("ProximityPromptService").PromptShown:Connect(function(prompt)
+            if MacroPriority.IsActive.OrbHunt then pcall(disableTalkPrompt, prompt) end
+        end)
+    end
+    local function restoreTalkPrompts()
+        if talkPromptConn then talkPromptConn:Disconnect(); talkPromptConn = nil end
+        for prompt in pairs(getgenv()._OrbHuntDisabledPrompts) do
+            pcall(function()
+                if prompt.Parent then prompt.Enabled = true end
+            end)
+        end
+        table.clear(getgenv()._OrbHuntDisabledPrompts)
+    end
+    pcall(restoreTalkPrompts) -- 예전 실행이 사냥 도중 끊겼으면 꺼둔 상호작용을 되살림
+
+    -- ✅ [사용자 요청] 오브 사냥이 끝났는데도 대화창이 남아 있는 경우 대비 - 이 감시는 다른 기능이
+    -- 작동 중이어도 돈다. 사냥이 끝날 때 대화창이 떠 있었거나, 끝난 뒤 20초 안에 대화창이 뜨면
+    -- [ Leave ]를 눌러 닫는다. 단, 대화창을 직접 쓰는 기능(상인 자동 구매 / 오토 미니게임)이
+    -- 작동 중일 때는 그 기능의 대화창일 수 있으므로 건드리지 않는다.
+    local strayDialogPending = false
+    getgenv()._OrbHuntDialogWatchUntil = 0
+    getgenv()._OrbDialogWatchGen = (getgenv()._OrbDialogWatchGen or 0) + 1
+    local myDialogWatchGen = getgenv()._OrbDialogWatchGen
+    task.spawn(function()
+        while getgenv()._OrbDialogWatchGen == myDialogWatchGen do
+            task.wait(0.5)
+            pcall(function()
+                if MacroPriority.IsActive.OrbHunt then return end -- 사냥 중에는 사냥 쪽에서 처리
+                if MacroPriority.IsActive.MerchantBuy or MacroPriority.IsActive.AutoMinigame then return end
+                if not (strayDialogPending or tick() < (getgenv()._OrbHuntDialogWatchUntil or 0)) then return end
+                local buttons, leave = findStrayDialogButtons()
+                if not buttons then
+                    strayDialogPending = false -- 대화창이 꺼짐
+                    return
+                end
+                if not strayDialogPending then
+                    strayDialogPending = true
+                    hwarn("사냥 후 NPC 대화창이 남아 있음 - [ Leave ]로 닫는 중")
+                end
+                if leave then
+                    task.wait(0.25)
+                    clickExactly(leave)
+                end
+            end)
+        end
+    end)
+
+    -- 대화창이 떠 있었으면 true (닫기까지 처리함)
+    local function closeStrayDialog()
+        if not findStrayDialogButtons() then return false end
+        releaseInputs()
+        stopWalking()
+        hwarn("NPC 대화창이 열림 - [ Leave ]로 닫는 중")
+        local start = tick()
+        while tick() - start < 15 do
+            local buttons, leave = findStrayDialogButtons()
+            if not buttons then break end -- 대화창이 꺼짐
+            SetCurrentAction("오브 사냥 - NPC 대화창 닫는 중 ([ Leave ] 클릭)")
+            if leave then
+                task.wait(0.25) -- 다른 대화 선택지들과 같게: 버튼이 나오고 잠깐 뒤에 클릭
+                clickExactly(leave)
+            end
+            task.wait(0.5)
+        end
+        task.wait(0.3) -- 렉 대비: 대화창이 완전히 닫힌 뒤 다시 전투
+        return true
+    end
+
     local function huntOrb(orb)
         local orbKey = normalizeName(orb.Name)
         hlog("오브 감지: " .. orb.Name)
@@ -8116,6 +8266,11 @@ do
             -- 레어 바이옴 팝핑이 오면 멈췄다가, 끝나면 복귀 단계로
             if pauseForEmergency() then
                 fightChar = nil
+            end
+
+            -- NPC 대화창이 떠 있으면 스킬을 멈추고 [ Leave ]로 닫은 뒤 다시 전투
+            if closeStrayDialog() then
+                continue
             end
 
             local hrp, hum = getHRP()
@@ -8316,6 +8471,7 @@ do
 
         -- Eden 해제 감시 (사냥하는 동안만): 장착 버튼 글자가 "Equip"으로 바뀌면 재장착 예약
         local watching = true
+        pcall(suppressTalkPrompts)
         task.spawn(function()
             while watching do
                 task.wait(0.5)
@@ -8334,6 +8490,10 @@ do
 
         local ok, err = pcall(huntOrb, orb)
         watching = false
+        pcall(restoreTalkPrompts)
+        -- 사냥이 끝난 뒤에도 대화창이 남아 있거나 늦게 뜨면 위의 감시가 닫는다 (다른 기능 작동 중이어도)
+        getgenv()._OrbHuntDialogWatchUntil = tick() + 20
+        if findStrayDialogButtons() then strayDialogPending = true end
         if not ok then hwarn("오류: " .. tostring(err)) end
 
         -- 무슨 일이 있어도 원래 상태로 정리
