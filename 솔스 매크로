@@ -1635,7 +1635,7 @@ do
                     local blockedBy = Settings.Sols.orbHuntStopOnPlayer and getgenv()._OrbHuntBlockedBy
                         and getgenv()._OrbHuntBlockedBy()
                     if blockedBy then
-                        eventText = eventText .. " (다른 플레이어 접속 중 - 일시 중지)"
+                        eventText = eventText .. " (다른 플레이어 @" .. tostring(blockedBy) .. " 접속 중 - 일시 중지)"
                     end
                     eventGroupLabel.Text = richLine("[이벤트]", eventText)
                 else
@@ -7079,12 +7079,18 @@ do
     }
 
     -- ✅ [사용자 요청] "다른 플레이어 접속 시 중지"의 예외 플레이어 (유저네임, 대소문자 무시)
+    -- ✅ [버그 수정] "아는 사람들밖에 없는데 다른 플레이어 접속 중이라고 뜸" - 목록의 이름이 실제
+    -- 유저네임과 달랐다: "RG_Acurx"(목록) vs "RG_Acrux"(실제). 실제 이름을 추가하고, 화면에서
+    -- 구분이 안 되는 대문자 I와 소문자 l은 같은 글자로 취급해서 비교한다(IEsenciaI 같은 이름 대비).
     local ORB_HUNT_EXCEPTION_PLAYERS = {
-        "RG_Acurx", "RN_Gelidness", "ROBERXDVG", "IEsenciaI", "BJ_RP", "9gn0va", "Haster5910",
+        "RG_Acrux", "RG_Acurx", "RN_Gelidness", "ROBERXDVG", "IEsenciaI", "BJ_RP", "9gn0va", "Haster5910",
     }
+    local function normalizePlayerName(name)
+        return (string.lower(name or ""):gsub("l", "i"))
+    end
     local exceptionSet = {}
     for _, n in ipairs(ORB_HUNT_EXCEPTION_PLAYERS) do
-        exceptionSet[string.lower(n)] = true
+        exceptionSet[normalizePlayerName(n)] = true
     end
 
     local VIM = Services.VirtualInputManager
@@ -7107,7 +7113,7 @@ do
     local function otherPlayerBlocking()
         if not Settings.Sols.orbHuntStopOnPlayer then return nil end
         for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer and not exceptionSet[string.lower(p.Name)] then
+            if p ~= LocalPlayer and not exceptionSet[normalizePlayerName(p.Name)] then
                 return p.Name
             end
         end
