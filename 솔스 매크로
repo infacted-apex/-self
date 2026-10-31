@@ -4590,6 +4590,7 @@ local function EnsureClickToMoveMode(shouldContinueFn)
         vim:SendKeyEvent(false, Enum.KeyCode.Down, false, game)
     end
     if shouldContinueFn() then
+        task.wait(0.2) -- 렉 대비
         vim:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
         task.wait(0.35)
         vim:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
@@ -7015,7 +7016,9 @@ do
         RECLICK_IDLE_TIME = 1.5,       -- 클릭했는데 이 시간 동안 안 움직이면 다시 클릭
 
         ENGAGE_DIST = 35,              -- 이 거리 안이면 스킬 + 뺑뺑이, 밖이면 걸어서 접근만
-        ORBIT_RADIUS = 14,             -- 뺑뺑이 돌 때 유지할 거리
+        ORBIT_RADIUS = 14,             -- 미니언과 뺑뺑이 돌 때 유지할 거리
+        ORB_ENGAGE_DIST = 15,          -- ✅ 오브는 이 거리 안으로 붙어서 부숨 (밖이면 걸어서 접근만)
+        ORB_ORBIT_RADIUS = 6,          -- ✅ 오브를 부술 때는 가까이서 작게 돎
         ORBIT_LEAD_DEG = 40,           -- 원을 따라 얼마나 앞쪽 지점으로 걸어갈지
         ORBIT_FLIP_MIN = 3,            -- 도는 방향을 바꾸는 간격(초, 최소~최대 랜덤)
         ORBIT_FLIP_MAX = 6,
@@ -7290,6 +7293,7 @@ do
             local ok, msg = equipEden()
             if ok then
                 hlog(HCFG.AURA_NAME .. ": " .. tostring(msg))
+                task.wait(0.5) -- 렉 대비: 장착 반영될 시간
                 return true
             end
             hwarn(HCFG.AURA_NAME .. " 장착 실패 (" .. attempt .. "/3) - " .. tostring(msg))
@@ -7593,7 +7597,11 @@ do
             end
 
             stopCamera()
-            if arrived then return true end
+            if arrived then
+                task.wait(0.3) -- 렉 대비: 카메라 원복이 반영될 시간
+                return true
+            end
+            task.wait(0.5) -- 렉 대비: 다음 시도 전 잠깐
         end
         return false
     end
@@ -7652,11 +7660,11 @@ do
     end
 
     -- 뺑뺑이: 목표를 중심으로 ORBIT_RADIUS 원을 따라 앞쪽 지점으로 계속 걸어감 (다른 미니언은 피함)
-    local function orbitPoint(myPos, centerPos, orbitDir, minions, focus)
+    local function orbitPoint(myPos, centerPos, orbitDir, minions, focus, radius)
         local rel = flat(myPos - centerPos)
         local angle = (rel.Magnitude > 0.5) and math.atan2(rel.Z, rel.X) or 0
         angle = angle + orbitDir * math.rad(HCFG.ORBIT_LEAD_DEG)
-        local point = centerPos + Vector3.new(math.cos(angle), 0, math.sin(angle)) * HCFG.ORBIT_RADIUS
+        local point = centerPos + Vector3.new(math.cos(angle), 0, math.sin(angle)) * (radius or HCFG.ORBIT_RADIUS)
 
         for _, m in ipairs(minions) do
             if m ~= focus then
@@ -7760,6 +7768,7 @@ do
         stopCamera()
         local _, hum = getHRP()
         setAutoRotate(hum, true)
+        task.wait(0.3) -- 렉 대비: 입력/카메라 정리가 반영된 뒤 준비 완료 알림
         SetCurrentAction("오브 사냥 - 긴급 기능(레어 바이옴 팝핑) 대기 중")
         Settings.EmergencyReady = true
         local waitStart = tick()
@@ -7790,6 +7799,7 @@ do
             return
         end
         hlog("오브(" .. orb.Name .. ") 도착 - 미니언 사냥 시작")
+        task.wait(0.5) -- 렉 대비: 도착 직후 잠깐 안정화
 
         local deadline = tick() + HCFG.HUNT_TIMEOUT
         local focus = nil
@@ -7846,6 +7856,7 @@ do
                 focus = nil
                 local _, newHum = getHRP()
                 setAutoRotate(newHum, false)
+                task.wait(0.5) -- 렉 대비: 복귀 직후 잠깐 안정화
                 continue
             end
 
@@ -7863,6 +7874,8 @@ do
                 killCount = killCount + 1
                 hlog("미니언 처치 (" .. killCount .. ")")
                 focus = nil
+                task.wait(0.2) -- 렉 대비: 처치가 반영된 뒤 다음 대상 고르기
+                minions = getMinions(orbKey)
             end
             if focus == orb and (#minions > 0 or not isModelAlive(orb)) then
                 focus = nil
@@ -7883,6 +7896,7 @@ do
                 if not orbAttackLogged then
                     orbAttackLogged = true
                     hlog("미니언 전부 처치 - 오브 공격 시작")
+                    task.wait(0.3) -- 렉 대비: 미니언이 정말 다 사라졌는지 반영될 시간
                 end
             elseif focus == orb then
                 attackingOrb = true
@@ -7920,6 +7934,7 @@ do
                 end
                 if fired then
                     ultLockUntil = tick() + HCFG.ULT_LOCK_TIME
+                    task.wait(0.2) -- 렉 대비
                 else
                     hwarn("R을 2초 동안 눌러도 콤보가 안 사라짐 - 잠깐 일반 스킬 쓰고 다시 시도")
                     ultRetryAt = tick() + 1.5
@@ -7927,7 +7942,7 @@ do
                 continue
             end
 
-            if dist > HCFG.ENGAGE_DIST then
+            if dist > (attackingOrb and HCFG.ORB_ENGAGE_DIST or HCFG.ENGAGE_DIST) then
                 -- 멀면 걸어서 접근만 (스킬 X)
                 SetCurrentAction(string.format("오브 사냥 - %s에게 접근 중 (거리 %d)",
                     attackingOrb and "오브" or "미니언", math.floor(dist)))
@@ -7942,7 +7957,8 @@ do
                 orbitDir = -orbitDir
                 nextFlip = tick() + HCFG.ORBIT_FLIP_MIN + math.random() * (HCFG.ORBIT_FLIP_MAX - HCFG.ORBIT_FLIP_MIN)
             end
-            local walkTo = orbitPoint(hrp.Position, focusPos, orbitDir, minions, focus)
+            local walkTo = orbitPoint(hrp.Position, focusPos, orbitDir, minions, focus,
+                attackingOrb and HCFG.ORB_ORBIT_RADIUS or HCFG.ORBIT_RADIUS)
             hum:MoveTo(walkTo)
             autoJump(hrp, hum, walkTo)
             if attackingOrb then
@@ -7990,6 +8006,7 @@ do
         if not orb then return end
         StartMacro("OrbHunt")
         SetCurrentAction("오브 사냥 - 시작")
+        task.wait(0.3) -- 렉 대비: 낚시 등 이전 동작이 완전히 멈출 시간
 
         -- Eden 해제 감시 (사냥하는 동안만): 장착 버튼 글자가 "Equip"으로 바뀌면 재장착 예약
         local watching = true
@@ -8018,6 +8035,7 @@ do
         stopCamera()
         local _, hum = getHRP()
         setAutoRotate(hum, true)
+        task.wait(0.3) -- 렉 대비: 정리가 반영된 뒤 자리 반납
         getgenv()._OrbHuntNoticeWindowUntil = tick() + 20 -- 끝난 뒤에 늦게 뜨는 알림도 집계
 
         if isModelAlive(orb) then
@@ -10757,6 +10775,17 @@ FeatureTab.Toggle({
     end
 })
 
+-- ✅ [사용자 요청] "2026 Halloween" 이벤트 기능 - 메모리 매치 / 포션 자동 제작보다 위에 배치
+FeatureTab.Label({ Text = "2026 Halloween" })
+
+FeatureTab.Toggle({
+    Text = "오브 & 미니언 자동 사냥",
+    Enabled = Settings.Sols.autoOrbHunt,
+    Callback = function(v)
+        Settings.Sols.autoOrbHunt = v
+    end
+})
+
 FeatureTab.Label({ Text = "솔스 오토설정 - 단일성" })
 
 FeatureTab.Toggle({
@@ -10800,16 +10829,6 @@ FeatureTab.Toggle({
 -- 이벤트 때 재사용할 수 있도록 그대로 남겨두고, 토글이 없으니 설정값은 기본값(false)으로
 -- 고정되어 절대 실행되지 않는다. 다시 쓰려면 여기에 토글 2개만 다시 추가하면 된다.
 
--- ✅ [사용자 요청] "2026 Halloween" 이벤트 기능
-FeatureTab.Label({ Text = "2026 Halloween" })
-
-FeatureTab.Toggle({
-    Text = "오브 & 미니언 자동 사냥",
-    Enabled = Settings.Sols.autoOrbHunt,
-    Callback = function(v)
-        Settings.Sols.autoOrbHunt = v
-    end
-})
 
 -- =============================
 -- [ 탭2-2: 기타 설정 - 메모리 매치 이동 / 오토 아이템 사용 부가 토글 ]
