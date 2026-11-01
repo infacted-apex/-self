@@ -116,7 +116,7 @@ if getgenv then
     getgenv()._ClickToMoveFailStreak = 0
     getgenv()._ClickToMoveFailAt = nil
     getgenv()._ClickToMoveSettingUntrusted = nil
-    getgenv()._OrbHuntEdenMissing = nil
+    getgenv()._OrbHuntMissingAuras = nil
 end
 
 -- ✅ [사용자 요청] 스크립트를 켜면 즉시 로딩 바가 뜨고, 상태 UI가 준비되면 사라진다.
@@ -7187,7 +7187,7 @@ RegisterSingleAction({
 local RunOrbHunt
 do
     local HCFG = {
-        -- ✅ [사용자 요청] 쓸 아우라 목록 (위에서부터 우선). Eden이 없으면 Glock을 쓴다.
+        -- ✅ [사용자 요청] 쓸 아우라 목록 (위에서부터 우선). Eden -> Terror -> Glock 순서.
         --   tab: "Special"(Aura Storage 탭 Position {1,0},{0,0}) / "Regular"(Position {0,0},{0,0})
         --   minionKeys / orbKeys: 돌아가며 누를 스킬
         --   useVoidrush / useSniper: 보이드 러쉬(V, 게이지 30 이상) / 저격총(R, 콤보 V) 사용 여부
@@ -7199,6 +7199,13 @@ do
                 useVoidrush = true, useSniper = true,
             },
             {
+                -- ✅ [사용자 요청] Terror (상시 아우라): Eden이 없으면 Terror. 스킬 E / X / F를 Eden처럼 돌아가며 사용.
+                name = "Terror", tab = "Regular",
+                minionKeys = { Enum.KeyCode.E, Enum.KeyCode.X, Enum.KeyCode.F },
+                orbKeys = { Enum.KeyCode.E, Enum.KeyCode.X, Enum.KeyCode.F },
+                useVoidrush = false, useSniper = false,
+            },
+            {
                 -- Glock: E(Melee) / F(Shoot) 번갈아 사용. 일반(Regular) 아우라.
                 name = "Glock", tab = "Regular",
                 minionKeys = { Enum.KeyCode.E, Enum.KeyCode.F },
@@ -7208,7 +7215,7 @@ do
         },
         ORB_NAMES = { "WINDY", "SNOWY", "RAINY", "SANDSTORM", "HELL", "STARFALL", "HEAVEN", "LOST FOREST", "CORRUPTION", "NULL" },
         -- 정리할 때 떼어줄 모든 스킬 키
-        ALL_SKILL_KEYS = { Enum.KeyCode.T, Enum.KeyCode.F, Enum.KeyCode.E, Enum.KeyCode.Q, Enum.KeyCode.V },
+        ALL_SKILL_KEYS = { Enum.KeyCode.T, Enum.KeyCode.F, Enum.KeyCode.E, Enum.KeyCode.Q, Enum.KeyCode.V, Enum.KeyCode.X },
         -- ✅ [사용자 요청] 보이드 러쉬(V): 오브 부술 때, StackUI.StackBar.StackText 숫자가 30 이상일 때만
         -- 다른 스킬들 사이에 섞어서 누른다 (R처럼 최우선은 아님)
         VOIDRUSH_KEY = Enum.KeyCode.V,
@@ -7439,7 +7446,7 @@ do
 
     local auraEquipButton = nil -- 장착 확인 버튼 참조 (해제 감시용)
     local needReequip = false
-    local currentProfile = nil  -- 지금 쓰고 있는 아우라 (Eden / Glock)
+    local currentProfile = nil  -- 지금 쓰고 있는 아우라 (Eden / Terror / Glock)
 
     -- 반환: 성공 여부, 메시지, notFound(목록에 그 아우라가 아예 없음)
     local function equipAura(profile)
@@ -7503,22 +7510,25 @@ do
         return success, msg, notFound
     end
 
-    -- ✅ [사용자 요청] Eden을 먼저 시도하고, 목록에 Eden이 아예 없으면 Glock을 쓴다.
-    -- (Eden이 있는데 다른 이유로 실패한 거면 Glock으로 넘어가지 않고 Eden을 다시 시도)
-    -- ✅ [사용자 요청] Eden이 없는 게 한 번 확인되면, 매크로를 껐다 켜기 전까지 Eden은 건너뛰고 Glock만 쓴다
-    -- (매크로 시작 토글을 켤 때 getgenv()._OrbHuntEdenMissing을 지워서 다시 Eden부터 확인)
+    -- ✅ [사용자 요청] 목록 순서대로(Eden -> Terror -> Glock) 시도하고, 목록에 그 아우라가 아예 없으면 다음 걸 쓴다.
+    -- (있는데 다른 이유로 실패한 거면 다음으로 넘어가지 않고 같은 아우라를 다시 시도)
+    -- ✅ [사용자 요청] 없는 게 한 번 확인된 아우라는 매크로를 껐다 켜기 전까지 건너뛴다
+    -- (매크로 시작 토글을 켤 때 getgenv()._OrbHuntMissingAuras를 비워서 다시 처음부터 확인)
     local function ensureAura()
+        getgenv()._OrbHuntMissingAuras = getgenv()._OrbHuntMissingAuras or {}
+        local missing = getgenv()._OrbHuntMissingAuras
         for attempt = 1, 3 do
-            for _, profile in ipairs(HCFG.AURA_PROFILES) do
+            for i, profile in ipairs(HCFG.AURA_PROFILES) do
                 if not canProceed() then return false end
-                if profile.name == "Eden" and getgenv()._OrbHuntEdenMissing then
+                -- 마지막 아우라(Glock)는 건너뛰지 않는다 (다 없다고 나와도 계속 시도)
+                if missing[profile.name] and i < #HCFG.AURA_PROFILES then
                     continue
                 end
                 SetCurrentAction("오브 사냥 - " .. profile.name .. " 장착 확인 중")
                 local ok, msg, notFound = equipAura(profile)
-                if not ok and notFound and profile.name == "Eden" and not getgenv()._OrbHuntEdenMissing then
-                    getgenv()._OrbHuntEdenMissing = true
-                    hlog("Eden이 없음 - 매크로를 다시 켜기 전까지 Glock만 사용")
+                if not ok and notFound and not missing[profile.name] and i < #HCFG.AURA_PROFILES then
+                    missing[profile.name] = true
+                    hlog(profile.name .. "이(가) 없음 - 매크로를 다시 켜기 전까지 건너뜀")
                 end
                 if ok then
                     if currentProfile ~= profile then
@@ -8252,7 +8262,7 @@ do
         if not canProceed() then return end
 
         if not ensureAura() then
-            hwarn("Eden/Glock 장착을 못 해서 이번 오브는 잠시 뒤 다시 시도")
+            hwarn("Eden/Terror/Glock 장착을 못 해서 이번 오브는 잠시 뒤 다시 시도")
             return
         end
         local moved = clickMoveTo(function()
@@ -11011,7 +11021,7 @@ MacroToggle = SolTab.Toggle({
         -- (먼저 지워버리면 종료 웹훅이 작동 시간을 계산할 수 없게 됨).
         if v then
             getgenv().MacroStartTime = tick()
-            getgenv()._OrbHuntEdenMissing = nil -- 매크로를 다시 켜면 Eden부터 다시 확인
+            getgenv()._OrbHuntMissingAuras = nil -- 매크로를 다시 켜면 Eden부터 다시 확인
         end
         updateBiomeMacroState()
         updateAutoBiomeUseState()
