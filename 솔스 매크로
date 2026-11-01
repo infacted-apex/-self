@@ -112,6 +112,9 @@ if getgenv then
     getgenv().AutoItemUseWantsSlot = false
     getgenv().MerchantBuyWantsSlot = false
     getgenv().OrbHuntWantsSlot = false
+    getgenv().BloodRainWantsSlot = false
+    getgenv()._BloodRainPending = false
+    getgenv()._BloodRainBiome = nil
     getgenv()._ClickToMoveBusy = false -- 이전 실행이 Click to Move 설정 도중 끊겼으면 잠금이 남아있을 수 있음
     getgenv()._ClickToMoveFailStreak = 0
     getgenv()._ClickToMoveFailAt = nil
@@ -429,7 +432,10 @@ local Settings = {
         autoSeaItemCollect = false,
         -- ✅ [사용자 요청] "2026 Halloween" - 오브 & 미니언 자동 사냥 / 사이드 기능(다른 플레이어 접속 시 중지)
         autoOrbHunt = false,
-        orbHuntStopOnPlayer = false
+        orbHuntStopOnPlayer = false,
+        -- ✅ [사용자 요청] "2026 Halloween" - 블러드 레인 자동 생성 (PUMPKIN MOON / GRAVEYARD 때
+        -- Cursed Rune Fragment가 2개 이상이면 1개 사용)
+        autoBloodRain = false
     },
 }
 
@@ -497,7 +503,8 @@ local MacroPriority = {
         MerchantBuy = false,
         AutoMinigame = false,
         AutoSeaItemCollect = false,
-        OrbHunt = false
+        OrbHunt = false,
+        BloodRain = false
     }
 }
 
@@ -739,6 +746,20 @@ local function IsAutoSeaItemCollectSignaled()
     return workspace:FindFirstChild("FloatingItem") ~= nil
 end
 
+-- ✅ [사용자 요청] "2026 Halloween" - 블러드 레인 자동 생성 신호 감지.
+-- PUMPKIN MOON / GRAVEYARD 바이옴이 떴을 때(바이옴 감시가 _BloodRainPending을 켬), 그 바이옴 한 번에
+-- 딱 1번만, Cursed Rune Fragment가 2개 이상이면 신호를 켠다. (실패하면 30초 뒤 재시도, 최대 3번)
+local function IsBloodRainSignaled()
+    if not (IsHalloweenTester and Settings.Sols and Settings.Sols.autoBloodRain and Settings.Sols.masterMacroEnabled) then
+        return false
+    end
+    if MacroPriority.IsActive.BloodRain then return true end
+    if not getgenv()._BloodRainPending then return false end
+    if tick() < (getgenv()._BloodRainRetryAt or 0) then return false end
+    local ok, amount = pcall(GetInventoryItemAmountWithoutOpening, "Cursed Rune Fragment")
+    return ok and amount and amount >= 2
+end
+
 -- ✅ [사용자 요청] 상인 자동 구매 신호 감지. 'Mari'/'Jester' 도착 로그를 감지하면
 -- getgenv().MerchantBuyWantsSlot이 true로 세팅된다(바이옴 감시 콜백에서 처리).
 local function IsMerchantBuySignaled()
@@ -760,6 +781,7 @@ local function IsAnySingleActionSignaled()
     return IsMemoryMatchSignaledFast() or IsPotionCraftSignaled() or getgenv().AutoItemUseWantsSlot == true
         or IsMerchantBuySignaled() or IsAutoMinigameSignaled() or IsAutoSeaItemCollectSignaled()
         or (getgenv()._IsOrbHuntSignaled ~= nil and getgenv()._IsOrbHuntSignaled()) -- 2026 Halloween 오브 사냥
+        or IsBloodRainSignaled() -- 2026 Halloween 블러드 레인 자동 생성
 end
 
 -- 낚시가 "단일성 행동" 신호에게 자리를 양보(대기)하는 통합 함수.
@@ -1425,7 +1447,8 @@ do
         MerchantBuy = "상인 자동 구매",
         AutoMinigame = "오토 미니게임",
         AutoSeaItemCollect = "바다 아이템 자동 수집",
-        OrbHunt = "오브 & 미니언 자동 사냥"
+        OrbHunt = "오브 & 미니언 자동 사냥",
+        BloodRain = "블러드 레인 자동 생성"
     }
 
     -- ✅ [치명적 버그 수정] LABEL_COLOR와 동일한 근본 원인 - 이 파일에는 클로저
@@ -1645,14 +1668,19 @@ do
                     or string.format('<font color="%s">[단일성 기능] 없음</font>', getgenv()._LABEL_COLOR)
 
                 -- > 이벤트 기능 (2026 Halloween)
-                if IsHalloweenTester and Settings.Sols.autoOrbHunt then
-                    local eventText = "오브 & 미니언 자동 사냥"
-                    local blockedBy = Settings.Sols.orbHuntStopOnPlayer and getgenv()._OrbHuntBlockedBy
-                        and getgenv()._OrbHuntBlockedBy()
-                    if blockedBy then
-                        eventText = eventText .. " (다른 플레이어 @" .. tostring(blockedBy) .. " 접속 중 - 일시 중지)"
+                if IsHalloweenTester and (Settings.Sols.autoOrbHunt or Settings.Sols.autoBloodRain) then
+                    local eventNames = {}
+                    if Settings.Sols.autoOrbHunt then
+                        local orbText = "오브 & 미니언 자동 사냥"
+                        local blockedBy = Settings.Sols.orbHuntStopOnPlayer and getgenv()._OrbHuntBlockedBy
+                            and getgenv()._OrbHuntBlockedBy()
+                        if blockedBy then
+                            orbText = orbText .. " (다른 플레이어 @" .. tostring(blockedBy) .. " 접속 중 - 일시 중지)"
+                        end
+                        table.insert(eventNames, orbText)
                     end
-                    eventGroupLabel.Text = richLine("[이벤트]", eventText)
+                    if Settings.Sols.autoBloodRain then table.insert(eventNames, "블러드 레인 자동 생성") end
+                    eventGroupLabel.Text = richLine("[이벤트]", table.concat(eventNames, ", "))
                 else
                     eventGroupLabel.Text = string.format('<font color="%s">[이벤트] 없음</font>', getgenv()._LABEL_COLOR)
                 end
@@ -3642,6 +3670,26 @@ do
         end
         local biomeRaw = text:match('"(.-)"')
         if not biomeRaw then return end
+
+        -- ✅ [사용자 요청] 블러드 레인 자동 생성 - PUMPKIN MOON / GRAVEYARD 바이옴 감지 (할로윈 바이옴이라
+        -- 아래의 일반 바이옴 목록과는 따로 처리: 웹후크/팝핑/바이옴 통계에는 영향 없음)
+        do
+            local hb = biomeRaw:upper():gsub("%s", "")
+            if hb == "PUMPKINMOON" or hb == "GRAVEYARD" then
+                if lowerText:find("started") then
+                    getgenv()._BloodRainBiome = biomeRaw:upper()
+                    getgenv()._BloodRainPending = true
+                    getgenv()._BloodRainTries = 0
+                    getgenv()._BloodRainRetryAt = 0
+                    print("[블러드 레인] " .. biomeRaw:upper() .. " 바이옴 시작 감지")
+                elseif getgenv()._BloodRainBiome then
+                    getgenv()._BloodRainBiome = nil
+                    getgenv()._BloodRainPending = false
+                end
+                return
+            end
+        end
+
         local validBiome = biomeWatchIsValidBiome(biomeRaw)
         if not validBiome then return end
         local action = lowerText:find("started") and "started" or "ended"
@@ -8952,6 +9000,52 @@ RegisterSingleAction({
         -- 자리를 되찾아가게 둔다.
     end
 })
+-- =============================
+-- [ 2026 Halloween - 블러드 레인 자동 생성 ]
+-- =============================
+-- ✅ [사용자 요청] 토글이 켜져 있을 때 PUMPKIN MOON / GRAVEYARD 바이옴이 뜨면, Cursed Rune Fragment가
+-- 2개 이상일 때 1개를 사용한다. 바이옴 한 번당 1번만 사용 (못 쓰면 30초 뒤 다시, 최대 3번).
+RegisterSingleAction({
+    name = "BloodRain",
+    signalFlagName = "BloodRainWantsSlot",
+    logName = "블러드 레인 자동 생성",
+    forceInitialRun = false, -- 바이옴이 실제로 떴을 때만 실행
+    isEnabled = function()
+        return IsHalloweenTester and Settings.Sols.autoBloodRain and Settings.Sols.masterMacroEnabled
+    end,
+    isSignaled = function()
+        local signaled = IsBloodRainSignaled()
+        if not signaled then getgenv().BloodRainWantsSlot = false end
+        return signaled
+    end,
+    run = function()
+        if not CanStartMacro("BloodRain") then return end
+        StartMacro("BloodRain")
+        local function shouldContinue()
+            return IsHalloweenTester and Settings.Sols.autoBloodRain and Settings.Sols.masterMacroEnabled
+                and not Settings.Emergency
+        end
+        local ok, used = pcall(OpenInventoryAndUseItemOnce, "Cursed Rune Fragment", 1, shouldContinue, "블러드 레인 자동 생성")
+        if ok and used then
+            getgenv()._BloodRainPending = false
+            print("[블러드 레인] " .. tostring(getgenv()._BloodRainBiome) .. " - Cursed Rune Fragment 1개 사용")
+        else
+            if not ok then warn("[블러드 레인 오류] " .. tostring(used)) end
+            getgenv()._BloodRainTries = (getgenv()._BloodRainTries or 0) + 1
+            if getgenv()._BloodRainTries >= 3 then
+                getgenv()._BloodRainPending = false
+                warn("[블러드 레인] Cursed Rune Fragment 사용 3번 실패 - 이번 바이옴은 건너뜀")
+            else
+                getgenv()._BloodRainRetryAt = tick() + 30
+            end
+        end
+        getgenv().BloodRainWantsSlot = false
+        SetCurrentAction("")
+        StopMacro("BloodRain")
+        -- ⚠️ 여기서 StartMacro("Fishing")을 부르지 않는다 (RegisterSingleAction 규칙 2)
+    end
+})
+
 -- === [UI 로딩 번쩍임 원천 차단 및 숨김 시스템] ===
 
 getgenv().TriggerUIHide = function(customImageId, onShowCallback)
@@ -10942,6 +11036,7 @@ do
             if IsHalloweenTester then
                 table.insert(toggleLines, "오브 & 미니언 자동 사냥 : " .. (Settings.Sols.autoOrbHunt and "ON" or "OFF"))
                 table.insert(toggleLines, "다른 플레이어 접속 시 중지 : " .. (Settings.Sols.orbHuntStopOnPlayer and "ON" or "OFF"))
+                table.insert(toggleLines, "블러드 레인 자동 생성 : " .. (Settings.Sols.autoBloodRain and "ON" or "OFF"))
             end
 
             -- ✅ [사용자 요청] 상인 자동 구매가 켜져 있으면, 무엇을 사도록 설정되어 있는지도
@@ -11311,6 +11406,15 @@ if IsHalloweenTester then
         Enabled = Settings.Sols.autoOrbHunt,
         Callback = function(v)
             Settings.Sols.autoOrbHunt = v
+        end
+    })
+
+    -- ✅ [사용자 요청] PUMPKIN MOON / GRAVEYARD 바이옴 때 Cursed Rune Fragment(2개 이상)를 1개 사용
+    FeatureTab.Toggle({
+        Text = "블러드 레인 자동 생성",
+        Enabled = Settings.Sols.autoBloodRain,
+        Callback = function(v)
+            Settings.Sols.autoBloodRain = v
         end
     })
 end
